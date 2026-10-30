@@ -103,3 +103,90 @@ Windows and Linux with Python 3.10 and 3.12. All four jobs passed installation,
 lint, formatting, ordinary tests, distribution builds, and installed-wheel
 API/CLI smoke checks without model downloads or GPU access. This publication
 record update changes documentation only.
+
+
+## v0.2 local interface release (2026-10-30)
+
+The v0.1 observations above are historical. v0.2 was developed from clean `main`
+`dfb5180` on `codex/vidfit-v0.2`. The reference GPU and Qwen revision are unchanged.
+Gradio 6.0.2 / Gradio Client 2.0.1 / Hugging Face Hub 0.36.2 were installed together
+with the pinned Qwen extra; `pip check` passed. Gradio 5 conflicted with Pillow 12,
+and a newer Gradio release required a Hub version incompatible with Transformers
+4.57.6, so the UI extra explicitly constrains the verified combination.
+
+- 76 ordinary tests passed; two real-model tests and one optional UI component test
+  were skipped in that CPU run. The suite includes a spawned inspection worker.
+- The separate opt-in real Qwen checks passed: **2 passed**. These exercise legacy
+  4/8/16-frame benchmarking, manual single mode, trial/gallery identity, native
+  temporal accounting and odd-count final-frame padding. No correctness assertion
+  was imposed on generated answers.
+- The optional real Gradio component check passed and confirms uploads reach the
+  core without invoking a system FFmpeg executable. Gradio remains optional for
+  the CPU-only installation.
+- Ruff lint and format checks passed, including README Python examples.
+- Five evaluation clips were prepared and checksum-verified; ten inspection cases
+  completed with null model answers/costs. References have agent visual review,
+  not human review. Sources, licenses and reviewed timestamps are recorded.
+- The controlled uniform/manual Qwen comparison and the existing downloaded sample
+  completed. [Actual answers and measurements](v0.2-results.md) separate evidence
+  coverage, answer judgment, tokens, allocator memory, and latency/output length.
+
+The managed shell could not access pytest's existing default temporary/cache
+folders, so checks used `-p no:cacheprovider --basetemp .local/<unique-run-name>`.
+The initial permissions errors were rerun successfully with those workspace paths.
+
+Browser QA found and fixed an unwanted Gradio audio-stripping conversion that
+required a system FFmpeg executable. Callback decoding/imports also suffered
+severe contention with the UI event-loop process. Jobs now use one persistent
+local process, with runtime imports before request handling. No warmup inference
+is hidden in startup. Two diagnostic UI attempts were interrupted during setup;
+they produced no model answer and are not reported as successful inference runs.
+
+
+Browser verification used the in-app browser against loopback HTTP. It exercised
+video upload and playback, uniform preview, real Qwen Answer once, invalid manual
+timestamps and error text, stale-preview invalidation, corrected manual preview,
+real manual rerun, previous/current answers and timestamped galleries. The
+[README screenshot](assets/interface.jpg) is the actual running interface with
+synthetic inputs and real model outputs, not a mockup. Those UI answers remain
+Not evaluated; the explicit agent judgments in the controlled comparison are
+separate. The offline report was also rendered and visually reviewed, including
+enlarging the event frame, source PTS/hash metadata and advanced measurements.
+
+
+Compare settings also completed in the browser: one uniform and one manual
+configuration, single mode, exactly one measured trial each, native processor
+validation true, coverage false/true and answers unreviewed in the downloaded
+payload. Both HTML/JSON export URLs returned HTTP 200 with complete content;
+the HTML retained embedded images and no external assets.
+
+Validation limits: the in-app browser did not expose a completed download event,
+and its file-download capability timed out. The native Chrome fallback was stopped
+by Computer Use because it could not reliably determine the current browser URL.
+Native download completion was therefore **not verified**. Browser automation ended
+at that point. The final responsive-width/card-minimum and timestamp-caption polish
+passed component/tests but was not visually rechecked. The README screenshot shows
+the real functional UI immediately before that cosmetic polish. No claim is made
+that those blocked browser checks passed. Local UI/GPU checks were on Windows;
+Linux/macOS UI and other GPUs were not exercised locally.
+
+
+Final package checks: `python -m build` built the source distribution and wheel.
+Archive inspection found no videos, weights, caches or generated reports; the sdist
+includes the annotation collection, preparation script and actual UI screenshot.
+The installed v0.2 wheel passed API and CLI single/manual inspection smoke checks
+outside the source path in the clean CPU environment, with Torch, Transformers
+and Gradio confirmed absent. UI help remains available there without UI imports.
+`pip check` passed. The final source UI restarted successfully on loopback with
+its width setting verified through its configuration endpoint; no inference is
+performed on launch.
+
+
+v0.2 publication: implementation commit
+`25b4525c251618d52f332e6b77d9dac36e214fad` was pushed to
+`codex/vidfit-v0.2` and the remote branch was verified against that exact commit.
+[PR #1](https://github.com/xyhsy11/vidfit/pull/1) targets `main`; it was opened through
+the configured GitHub CLI after the connector returned an integration-permission
+403. No default-branch merge, force push or unrelated history rewrite was performed.
+The remaining checklist/publication record is a separate documentation commit.
+Remote CI results, if still running, are not counted as passed local validation.

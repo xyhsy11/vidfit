@@ -16,3 +16,8 @@ examples/generated/
 *.pt
 *.pth
 .local/
+
+*.webm
+*.mov
+*.mkv
+*.avi
