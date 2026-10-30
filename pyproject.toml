@@ -12,7 +12,7 @@ license = "MIT"
 dependencies = ["av>=16,<17", "Pillow>=12,<13", "numpy>=2,<3"]
 
 [project.optional-dependencies]
-qwen = ["torch==2.8.0", "torchvision==0.23.0", "transformers==4.57.6"]
+qwen = ["torch==2.8.0", "torchvision==0.23.0", "transformers==4.57.6", "hf-xet==1.7.1"]
 dev = ["pytest>=8,<10", "ruff>=0.14,<1", "build>=1.2,<2"]
 
 [project.scripts]

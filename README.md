@@ -15,7 +15,8 @@ frame budgets through an offline HTML report and structured JSON.
 Implemented: an installable package, CLI and Python API, streaming PyAV decoding,
 deterministic midpoint sampling, a synthetic demo, hardware-free inspection,
 a native Qwen3-VL adapter, repeated trials, and self-contained exports.
-CPU tests and CI require no model weights or PyTorch. See
+The full 4/8/16-frame Qwen comparison ran successfully on a 16 GB RTX 3080
+Laptop GPU. CPU tests and CI require no model weights or PyTorch. See
 [validation](docs/validation.md) for actual checks and remaining validation gaps.
 
 The demo is a 60-second **synthetic** application recording. An error appears only
@@ -52,8 +53,8 @@ vidfit demo --output examples/generated/brief-error.mp4
 vidfit compare --video examples/generated/brief-error.mp4 --question "What error message appeared?" --frame-budgets 4 8 16 --sampling uniform --backend inspect --fixture-manifest examples/generated/brief-error.truth.json --output-dir reports/inspection
 ```
 
-For a smaller install, use `pip install .` without `[dev]`. This repository is
-published on GitHub; no PyPI release is claimed. If `py` is unavailable on Windows,
+For a smaller install, use `pip install .` without `[dev]`. No PyPI release is
+claimed. If `py` is unavailable on Windows,
 use the full path to an installed Python 3.12 interpreter. Activation is optional;
 the explicit PowerShell paths avoid changing execution policy.
 
@@ -78,8 +79,9 @@ processor downloads require network access and several GB of disk space.
 Decoding, processing, and inference run locally. No inference service receives
 the video. Reports embed its selected frames; share them intentionally.
 
-The verified integration targets **Transformers 4.57.6**, **PyTorch 2.8.0**, and
-**torchvision 0.23.0**. Install a PyTorch wheel appropriate for your hardware from
+The verified integration uses **Transformers 4.57.6**, **PyTorch 2.8.0**,
+**torchvision 0.23.0**, and **hf-xet 1.7.1** for model downloads. Install a
+PyTorch wheel appropriate for your hardware from
 the [official PyTorch instructions](https://pytorch.org/get-started/locally/), then
 install the optional extra. The reference CUDA setup uses CUDA 12.8 wheels:
 
@@ -222,8 +224,8 @@ python -m ruff format --check .
 python -m build
 ```
 
-CI runs CPU tests, lint, wheel builds, and installed-wheel API/CLI smoke checks
-on Windows and Linux with Python 3.10 and 3.12. It does not download weights or
+The CI workflow is configured to run CPU tests, lint, wheel builds, and
+installed-wheel API/CLI smoke checks on Windows and Linux with Python 3.10 and 3.12. It does not download weights or
 install model dependencies. macOS setup is documented but is not in the CI matrix.
 
 Opt into the real-model integration test only after installing `[qwen]`:
