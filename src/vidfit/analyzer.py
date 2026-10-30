@@ -8,7 +8,7 @@ from time import perf_counter
 
 from vidfit.backends.inspection import InspectionBackend
 from vidfit.core.profiling import INFERENCE_METRICS, describe_error, environment, summarize
-from vidfit.core.sampling import midpoint_targets
+from vidfit.core.sampling import SelectionSpec
 from vidfit.core.schemas import Comparison, Configuration, Trial
 from vidfit.core.video import probe_video, sample_video
 
@@ -51,6 +51,20 @@ class VideoAnalyzer:
             revision=revision,
         )
 
+    def preview(self, video, selection):
+        """Decode the exact selection without constructing a model. Outside trial timing."""
+        metadata = probe_video(video)
+        frames, metrics = sample_video(video, metadata, selection)
+        self._validate_backend_selection(metadata, frames)
+        return metadata, frames, metrics
+
+    def _validate_backend_selection(self, metadata, frames):
+        if self.backend_name == "qwen3vl":
+            if len(frames) < 2:
+                raise ValueError("Qwen3-VL requires at least 2 distinct selected frames")
+            if not metadata["constant_frame_rate"]:
+                raise ValueError("Qwen3-VL requires constant-frame-rate video; use inspect for VFR")
+
     def compare(
         self,
         video,
@@ -60,20 +74,43 @@ class VideoAnalyzer:
         warmup=1,
         repeats=3,
         fixture_manifest=None,
+        *,
+        selections=None,
+        execution_mode="benchmark",
+        annotation=None,
+        annotation_id=None,
+        progress=None,
     ) -> Comparison:
         if not isinstance(question, str) or not question.strip():
             raise ValueError("question must be a nonempty string")
         if sampling != "uniform":
-            raise ValueError("only uniform midpoint sampling is supported")
+            raise ValueError("use selections=[SelectionSpec.manual(...)] for manual sampling")
+        if execution_mode not in ("single", "benchmark"):
+            raise ValueError("execution_mode must be single or benchmark")
+        if execution_mode == "single":
+            warmup, repeats = 0, 1
+        notify = progress or (lambda message: None)
         for name, value, minimum in (("warmup", warmup, 0), ("repeats", repeats, 1)):
             if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
-        budgets = list(frame_budgets)
-        if not budgets or len(set(budgets)) != len(budgets):
-            raise ValueError("provide at least one distinct frame budget; duplicates are invalid")
-        for budget in budgets:
-            midpoint_targets(1, budget)
+        if selections is None:
+            budgets = list(frame_budgets)
+            if not budgets or len(set(budgets)) != len(budgets):
+                raise ValueError(
+                    "provide at least one distinct frame budget; duplicates are invalid"
+                )
+            selections = [SelectionSpec.uniform(b) for b in budgets]
+        else:
+            selections = list(selections)
+            if not selections or any(not isinstance(s, SelectionSpec) for s in selections):
+                raise ValueError("selections must contain at least one SelectionSpec")
+        notify("Probing video (setup; outside measured inference)")
         metadata = probe_video(video)
+        evaluation_annotation = None
+        if annotation is not None:
+            from vidfit.evaluation.annotations import load_annotation
+
+            evaluation_annotation = load_annotation(annotation, metadata, question, annotation_id)
         fixture = None
         if fixture_manifest is not None:
             fixture = json.loads(Path(fixture_manifest).read_text(encoding="utf-8"))
@@ -96,7 +133,11 @@ class VideoAnalyzer:
             question=question,
             settings={
                 **self.options,
-                "sampling": sampling,
+                "sampling": "uniform"
+                if all(s.method == "uniform" for s in selections)
+                else "specified",
+                "selections": [s.to_dict() for s in selections],
+                "execution_mode": execution_mode,
                 "warmup": warmup,
                 "repeats": repeats,
                 "generation": {
@@ -105,20 +146,29 @@ class VideoAnalyzer:
                     "max_new_tokens": self.options["max_new_tokens"],
                     "use_cache": True,
                 },
-                "trial_policy": "one first invocation, then warmup and measured trials per budget",
-                "sampling_mapping": "nearest actual PTS to midpoint; ties choose earlier frame",
+                "trial_policy": (
+                    "exactly one measured invocation per selection; no warmup or hidden calls"
+                    if execution_mode == "single"
+                    else "one first invocation, then warmup and measured trials per selection"
+                ),
+                "sampling_mapping": "nearest actual PTS; ties choose earlier frame",
             },
             environment=environment(),
             model={},
             fixture=fixture,
         )
         backend, load_error, first_invocation = None, None, True
-        for budget in budgets:
-            config = Configuration(budget)
+        for selection in selections:
+            config = Configuration(selection.count, selection=selection.to_dict())
             result.configurations.append(config)
             try:
-                config.evidence, _ = sample_video(video, metadata, budget)
+                notify(f"Previewing {selection.method} / {selection.count} frames (setup)")
+                config.evidence, config.setup = sample_video(video, metadata, selection)
+                self._validate_backend_selection(metadata, config.evidence)
                 config.selected_frames = len(config.evidence)
+                config.selection["target_timestamps_s"] = [
+                    e.target_timestamp_s for e in config.evidence
+                ]
                 config.validation = {
                     "distinct_source_frames": True,
                     "trial_evidence_consistent": True,
@@ -135,6 +185,7 @@ class VideoAnalyzer:
                     }
                 if backend is None and load_error is None:
                     try:
+                        notify("Loading backend (setup; outside measured inference)")
                         if self.backend_name == "inspect":
                             backend = InspectionBackend()
                         else:
@@ -148,10 +199,15 @@ class VideoAnalyzer:
                             "identifier": self.options["model"],
                             "loading_error": load_error,
                         }
-                phases = ["first_invocation"] if first_invocation else []
+                phases = (
+                    ["first_invocation"]
+                    if first_invocation and execution_mode == "benchmark"
+                    else []
+                )
                 phases += ["warmup"] * warmup + ["measured"] * repeats
                 first_invocation = False
                 for index, phase in enumerate(phases):
+                    notify(f"{selection.method} / {selection.count} frames: {phase} {index + 1}")
                     trial = Trial(phase, index)
                     config.trials.append(trial)
                     trial.metrics = dict.fromkeys(
@@ -164,10 +220,19 @@ class VideoAnalyzer:
                         backend.synchronize()
                         backend.reset_peak_memory()
                         started = perf_counter()
-                        frames, decode_metrics = sample_video(video, metadata, budget)
+                        frames, decode_metrics = sample_video(video, metadata, selection)
                         trial.metrics.update(decode_metrics)
                         trial.evidence_hashes = [e.sha256_rgb for e in frames]
-                        if trial.evidence_hashes != [e.sha256_rgb for e in config.evidence]:
+
+                        def identity(e):
+                            return (
+                                e.frame_index,
+                                e.timestamp_s,
+                                e.target_timestamp_s,
+                                e.sha256_rgb,
+                            )
+
+                        if [identity(e) for e in frames] != [identity(e) for e in config.evidence]:
                             config.validation["trial_evidence_consistent"] = False
                             raise ValueError("decoded evidence changed between trials")
                         outcome = backend.run(frames, metadata, question)
@@ -194,4 +259,14 @@ class VideoAnalyzer:
                 )
             except Exception as exc:
                 config.status, config.error = "failed", describe_error(exc)
+        # References and rubrics are attached only AFTER inference. They are never backend inputs.
+        result.annotation = evaluation_annotation
+        if evaluation_annotation is not None:
+            from vidfit.evaluation.annotations import evidence_coverage
+
+            for config in result.configurations:
+                config.validation["annotation_evidence_coverage"] = evidence_coverage(
+                    evaluation_annotation, config.evidence
+                )
+        notify("Finished; exporting is outside measured inference")
         return result

@@ -1,6 +1,6 @@
 # Measurement and evidence contract
 
-Schema `1.0.0` is represented by dataclasses in `core/schemas.py`. Exported JSON
+Schema `1.1.0` is represented by dataclasses in `core/schemas.py`. Exported JSON
 includes every trial, full source PNGs, RGB hashes, source PTS/time bases, requested
 timestamps, software versions, model/processor revisions, settings, summaries,
 and validation results. Times use seconds, memory uses bytes, and token/frame
@@ -114,3 +114,73 @@ the processor input. Reports use the video basename and omit host/user names.
 Reports embed source video frames and can contain sensitive content; share them
 intentionally. Dependency/model downloads need network access, but decoding and
 inference run locally.
+
+
+## v0.2 schema and execution modes
+
+Schema 1.1.0 adds per-configuration `selection` and `setup`, per-trial `evaluation`,
+optional top-level `annotation`, and `settings.execution_mode`. Existing frame,
+trial and metric fields retain their meaning. `Comparison.from_dict` also reads
+1.0.0 records with the new fields defaulted. The original uniform API and benchmark
+invocation counts remain compatible. `settings.sampling` is `specified` when manual
+selections are present; use each configuration's selection method for interpretation.
+
+`SelectionSpec.uniform(n)` preserves midpoint sampling.
+`SelectionSpec.manual([...])` preserves the requested timestamp list; its validated,
+sorted targets are retained in `selection.target_timestamps_s`. Timestamps must be
+finite and inside the half-open range `[0, duration)`. Both methods use the same
+nearest-source-PTS mapper and earlier-frame tie rule. Different requests that map
+to the same frame fail instead of duplicating source inputs. Trials compare frame
+indices, actual/requested timestamps and RGB hashes with the initial gallery.
+
+`execution_mode="single"` has **exactly one measured invocation per configuration**,
+no first-invocation call and no warmups. Effective warmup/repeat settings are 0/1,
+even when callers leave benchmark defaults in place. The first single run may pay
+initial kernel/runtime costs; it is not a steady-state benchmark. `benchmark`
+retains one first invocation across the comparison, then configured warmups and
+repetitions per selection. Only successful measured trials enter summaries.
+
+The UI defaults to single mode in both Answer once and Compare settings. Its
+benchmark checkbox explicitly opts into repeated calls. A model is constructed per
+request and reused across that request's configurations. Preview metadata and
+frame extraction precede inference and are excluded from pipeline latency.
+Configuration `setup` stores initial decode/sampling costs; `video.probe_time_s`
+records metadata work. The UI also requires a matching preview snapshot and video
+hash. The trial decode remains measured; no preview pixels are substituted for it.
+
+References and rubrics live in an optional annotation file separate from synthetic
+fixture manifests. Only source frames, the question and source temporal metadata
+are supplied to the backend. Annotation content is validated separately and
+attached to exported results after inference. No reference answer, rubric, review
+status or relevant interval is placed in model messages or processor metadata.
+
+Each trial starts with `evaluation.verdict="not_evaluated"` and
+`method="unreviewed"`. An explicit judgment records a verdict, method, rationale,
+reviewer/check identifier, timestamp and answer hash. Methods are `human`,
+`automated` and `agent`; VidFit does not infer or certify human authorship.
+`unanswerable` means a judgment that the answer appropriately recognizes the
+question cannot be answered from the video. It is not a synonym for runtime failure.
+The collection's `answerability` separately describes the question/reference.
+
+Coverage tests whether **any** actual selected timestamp falls within any annotated
+half-open interval. It does not measure comprehensive temporal coverage. With no
+applicable intervals it is null/Not annotated. Correctness, evidence overlap,
+completion, and answer agreement are independent. Agent-reviewed starter references
+are not human-reviewed labels, and the starter set does not establish general
+accuracy. See [evaluation](evaluation.md).
+
+
+Qwen runtime imports are performed once at UI startup, in a single local worker before the interface accepts requests; they do not load weights or run inference. The model-loading
+metric covers config/processor/weight loading and device placement, beginning
+after dependency imports. Import/startup time is setup, not measured inference.
+With `selections=...`, those specifications replace the legacy `frame_budgets`
+argument. CLI exit codes remain 0 for complete runs, 1 for failed/incomplete
+configurations, and 2 for invalid top-level input or launch errors.
+
+
+UI callbacks dispatch to one persistent local worker process, avoiding event-loop
+contention during decoding, imports and model work. It executes the same analyzer
+methods; no inference service is used. A single worker and Gradio's shared queue
+serialize jobs. IPC, PNG gallery transport and UI rendering are outside core trial
+latency. The worker imports Qwen classes once, but model weights are loaded per
+request and reused only across that request's configurations.

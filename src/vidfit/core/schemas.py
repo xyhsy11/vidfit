@@ -31,6 +31,14 @@ class Trial:
     unavailable_reasons: dict[str, str] = field(default_factory=dict)
     processing: dict[str, Any] = field(default_factory=dict)
     evidence_hashes: list[str] = field(default_factory=list)
+    evaluation: dict[str, Any] = field(
+        default_factory=lambda: {
+            "verdict": "not_evaluated",
+            "method": "unreviewed",
+            "rationale": None,
+            "reviewer": None,
+        }
+    )
 
 
 @dataclass
@@ -43,6 +51,8 @@ class Configuration:
     trials: list[Trial] = field(default_factory=list)
     summary: dict[str, Any] = field(default_factory=dict)
     validation: dict[str, Any] = field(default_factory=dict)
+    selection: dict[str, Any] = field(default_factory=dict)
+    setup: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -57,7 +67,19 @@ class Comparison:
     model: dict[str, Any]
     configurations: list[Configuration] = field(default_factory=list)
     fixture: dict[str, Any] | None = None
-    schema_version: str = "1.0.0"
+    annotation: dict[str, Any] | None = None
+    schema_version: str = "1.1.0"
+
+    @classmethod
+    def from_dict(cls, data):
+        data = dict(data)
+        configs = []
+        for item in data.pop("configurations"):
+            item = dict(item)
+            item["evidence"] = [FrameEvidence(**e) for e in item["evidence"]]
+            item["trials"] = [Trial(**t) for t in item["trials"]]
+            configs.append(Configuration(**item))
+        return cls(**data, configurations=configs)
 
     @property
     def complete(self) -> bool:

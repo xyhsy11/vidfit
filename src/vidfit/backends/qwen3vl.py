@@ -140,15 +140,21 @@ def prepare_video_inputs(processor, frames, metadata, question, max_pixels):
     return inputs, processing, visual_tokens
 
 
+def preload_dependencies():
+    """Import runtime classes before starting a UI event loop; no weights or inference."""
+    try:
+        import torch
+        from transformers import AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration
+    except ImportError as exc:
+        raise RuntimeError(
+            "Qwen dependencies missing; install vidfit[qwen] in your virtualenv"
+        ) from exc
+    return torch, AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration
+
+
 class Qwen3VLBackend:
     def __init__(self, model, device, dtype, max_pixels, max_new_tokens, revision):
-        try:
-            import torch
-            from transformers import AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration
-        except ImportError as exc:
-            raise RuntimeError(
-                "Qwen dependencies missing; install vidfit[qwen] in your virtualenv"
-            ) from exc
+        torch, AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration = preload_dependencies()
         if importlib.metadata.version("transformers") != "4.57.6":
             raise RuntimeError("this adapter requires the verified transformers==4.57.6 processor")
         self.torch, self.device = torch, torch.device(device)

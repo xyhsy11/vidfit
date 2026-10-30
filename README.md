@@ -1,275 +1,235 @@
 # VidFit
 
-**Inspect the frames. Compare the evidence. Measure the run.**
+**Ask a video. Inspect the inputs. Compare the result.**
 
-VidFit is an open-source, local-first Python workbench for inspecting and comparing
-video-language model inputs and inference costs.
+Video models can miss a brief event because the relevant frame never reached them.
+VidFit gives you a local interface to ask a question, see the answer beside the
+frames supplied to the model, edit those frames, and compare another run. It also
+records processed visual tokens, latency and GPU allocator memory for reproducible
+experiments.
 
-A model can miss a brief event because it never received the relevant frame.
-VidFit makes that evidence visible alongside the answer, processed visual tokens,
-latency, and CUDA allocator memory. This first proof of concept compares uniform
-frame budgets through an offline HTML report and structured JSON.
+![VidFit local interface with real Qwen answers and selected input frames](docs/assets/interface.jpg)
 
-## Current status
+The screenshot records a real run before final width/caption polish; see
+[validation limits](docs/validation.md#v02-local-interface-release-2026-10-30).
 
-Implemented: an installable package, CLI and Python API, streaming PyAV decoding,
-deterministic midpoint sampling, a synthetic demo, hardware-free inspection,
-a native Qwen3-VL adapter, repeated trials, and self-contained exports.
-The full 4/8/16-frame Qwen comparison ran successfully on a 16 GB RTX 3080
-Laptop GPU. CPU tests and CI require no model weights or PyTorch. See
-[validation](docs/validation.md) for actual checks and remaining validation gaps.
+v0.2 includes a Gradio interface, uniform and manual timestamp selection, an
+optional five-clip / ten-question evaluation starter set, and offline HTML / JSON
+exports. Automatic frame selection is a follow-up milestone.
 
-The demo is a 60-second **synthetic** application recording. An error appears only
-during `[24.0, 26.0)` seconds. Four selected frames miss it; sixteen include it.
-This evidence difference is verified in the decoded pixels. A correct model
-answer is an experimental result, not a promised consequence of a larger budget.
+## Install and launch
 
-## Quick start: inspect without a GPU
+Python **3.10–3.13** is supported; **3.12** is the verified local version.
+The real-model path was verified on Windows with an **RTX 3080 Laptop GPU, 16 GB**,
+PyTorch 2.8.0+cu128, Transformers 4.57.6 and cached
+`Qwen/Qwen3-VL-2B-Instruct`. This is a tested configuration, not a minimum GPU
+requirement. CPU tests need neither PyTorch nor weights.
 
-Use Python **3.10–3.13**; Python **3.12** is the reference version. Python 3.14 is
-outside this milestone's dependency range. No system FFmpeg executable is needed:
-PyAV wheels include the FFmpeg libraries used for decoding and demo encoding.
-
-Windows PowerShell:
+Windows PowerShell, from a new checkout:
 
 ```powershell
 git clone https://github.com/xyhsy11/vidfit.git
 cd vidfit
 py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\vidfit.exe demo --output examples/generated/brief-error.mp4
-.\.venv\Scripts\vidfit.exe compare --video examples/generated/brief-error.mp4 --question "What error message appeared?" --frame-budgets 4 8 16 --sampling uniform --backend inspect --fixture-manifest examples/generated/brief-error.truth.json --output-dir reports/inspection
+.\.venv\Scripts\python.exe -m pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
+.\.venv\Scripts\python.exe -m pip install -e ".[ui,qwen]"
+.\.venv\Scripts\vidfit.exe ui
 ```
 
-Linux/macOS:
+A single local worker imports the Qwen runtime at startup; weights load after Run.
+Open **http://127.0.0.1:7860**. The server binds to loopback, disables Gradio
+analytics and sharing, and serializes inference requests. Processing and inference
+stay on your computer. Initial package/model downloads require internet access;
+the model download is several GB. Reports contain your selected frames, so review
+them before sharing.
+
+On Linux, create/activate a Python 3.12 environment, install the appropriate
+[PyTorch build](https://pytorch.org/get-started/locally/), then:
 
 ```sh
-git clone https://github.com/xyhsy11/vidfit.git
-cd vidfit
-python3.12 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e ".[dev]"
-vidfit demo --output examples/generated/brief-error.mp4
-vidfit compare --video examples/generated/brief-error.mp4 --question "What error message appeared?" --frame-budgets 4 8 16 --sampling uniform --backend inspect --fixture-manifest examples/generated/brief-error.truth.json --output-dir reports/inspection
+python -m pip install -e ".[ui,qwen]"
+vidfit ui
 ```
 
-For a smaller install, use `pip install .` without `[dev]`. No PyPI release is
-claimed. If `py` is unavailable on Windows,
-use the full path to an installed Python 3.12 interpreter. Activation is optional;
-the explicit PowerShell paths avoid changing execution policy.
+macOS supports the inspection path; Apple MPS inference is not implemented.
+Linux setup is supported by the package; GPU/UI validation here was on Windows.
 
-Open `reports/inspection/comparison.html` in a browser. Its styling and source
-frames are embedded; it needs no server, internet connection, or external assets.
-Click an evidence frame to enlarge it. The corresponding `comparison.json`
-retains every trial, timestamp, hash, setting, and measurement.
+| Install | Purpose |
+| --- | --- |
+| `python -m pip install .` | Hardware-free inspection API / CLI; no model or UI imports |
+| `python -m pip install ".[ui]"` | Local interface with `vidfit ui --backend inspect` |
+| `python -m pip install ".[qwen]"` | Native Qwen3-VL inference |
+| `python -m pip install -e ".[dev]"` | Tests, Ruff and package build |
+| `python -m pip install -e ".[ui,qwen,dev]"` | Full development environment |
 
-Inspection mode clearly states **“Inspection only — model inference was not run.”**
-Answers, generation times, visual tokens, and GPU memory are `null` with reasons.
-Only genuine decode, sampling, evidence, and pipeline measurements are recorded.
+The UI extra pins Gradio 6.0.2 and a Hugging Face Hub range compatible with the
+pinned Qwen adapter. No PyPI publication is claimed; install from this checkout.
 
-The generator refuses to overwrite existing assets. Use a new output path for a
-second fixture. Generated videos, truth manifests, reports, weights, and caches
-are ignored by Git.
-
-## Run Qwen3-VL locally
-
-The model is `Qwen/Qwen3-VL-2B-Instruct`. Model dependencies are optional and are
-loaded only when `--backend qwen3vl` is explicitly requested. Initial weights and
-processor downloads require network access and several GB of disk space.
-Decoding, processing, and inference run locally. No inference service receives
-the video. Reports embed its selected frames; share them intentionally.
-
-The verified integration uses **Transformers 4.57.6**, **PyTorch 2.8.0**,
-**torchvision 0.23.0**, and **hf-xet 1.7.1** for model downloads. Install a
-PyTorch wheel appropriate for your hardware from
-the [official PyTorch instructions](https://pytorch.org/get-started/locally/), then
-install the optional extra. The reference CUDA setup uses CUDA 12.8 wheels:
-
-```sh
-python -m pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
-python -m pip install -e ".[qwen]"
-vidfit compare --video examples/generated/brief-error.mp4 --question "What error message appeared?" --frame-budgets 4 8 16 --sampling uniform --backend qwen3vl --device cuda:0 --dtype float16 --max-pixels 262144 --max-new-tokens 128 --warmup 1 --repeats 3 --fixture-manifest examples/generated/brief-error.truth.json --output-dir reports/qwen3vl
-```
-
-On PowerShell, use `.\.venv\Scripts\python.exe` and
-`.\.venv\Scripts\vidfit.exe` if the environment is not activated. Optionally place
-downloads in the ignored project cache before the real run:
+For a hardware-free first look:
 
 ```powershell
-$env:HF_HOME = "$PWD/.cache/huggingface"
+.\.venv\Scripts\python.exe -m pip install -e ".[ui]"
+.\.venv\Scripts\vidfit.exe demo --output examples/generated/brief-error.mp4
+.\.venv\Scripts\vidfit.exe ui --backend inspect --video examples/generated/brief-error.mp4
 ```
 
-```sh
-export HF_HOME="$PWD/.cache/huggingface"
+Inspection shows real decoded frames and exports, with **no model answer** and
+unavailable inference costs. The demo generator refuses to overwrite existing
+assets; reuse an existing file or choose a new path.
+
+## Use your own video
+
+1. Upload a video and use the player to inspect it. H.264 MP4 is the verified
+   browser playback format. The core uses PyAV; no system FFmpeg executable is
+   needed for that path. Audio is not sent to the model.
+2. Enter a question. Choose **Answer once**, a uniform frame budget, then click
+   **Preview selected frames** and **Run selected settings**.
+3. Read **Model answer** beside the timestamped input gallery. Click a frame to
+   enlarge it. Captions distinguish requested and actual source timestamps.
+4. Switch selection A to **manual**, enter seconds separated by commas or spaces,
+   preview again, and rerun. Your previous result remains next to the current one.
+5. Choose **Compare settings** to run A and B sequentially with the same question,
+   model and generation settings. Download the offline HTML report and structured
+   JSON below the results.
+
+An edit to the video or selection invalidates the preview. Manual timestamps must
+be finite, inside `[0, duration)` and map to distinct source frames. Output frames
+are chronological. Mapping uses nearest decoded presentation timestamps, with the
+earlier frame winning a tie. Qwen requires at least two distinct frames and a
+constant-frame-rate video; inspection also supports one-frame and VFR sources.
+Native Qwen temporal padding is recorded separately from selected source frames.
+
+**Answer once and Compare settings each run exactly one inference per selected
+configuration by default.** Enable the explicit benchmark checkbox for one
+separate first invocation, then the configured warmups and measured repetitions.
+The model is loaded once per request and reused across its configurations; loading,
+metadata probing, previews and exports are outside measured inference.
+
+Use `vidfit ui --max-pixels 131072 --max-new-tokens 64` to choose smaller explicit
+limits. There is no silent model, frame, precision or memory fallback. Unavailable
+CUDA, unsupported videos, invalid selections and run failures are surfaced in the
+interface or report. A single UI server serializes runs; separate CLI/server
+processes are the operator's responsibility.
+
+## Interpret results
+
+- **Run status** says whether processing completed or failed. It is not a quality score.
+- **Evidence coverage** says whether selected timestamps overlap an optional
+  annotated interval. With no applicable annotation it is unavailable.
+- **Answer correctness** is **Not evaluated** until an explicit judgment is recorded.
+  Human, automated and agent judgments are labeled separately.
+- Displayed frames are **inputs provided to the model**, not model-verified
+  citations or explanations. Answer agreement is not accuracy.
+- **Latency** is elapsed work. Longer generated answers can take more time.
+  **Visual tokens** count processed visual input; **GPU memory** measures PyTorch
+  allocator peaks including resident weights, not total device use.
+
+Every benchmark trial retains its own answer, phase, measurements and evaluation.
+The offline HTML embeds frames and styling; JSON retains source indices, PTS,
+hashes, requested timestamps, selection method, settings and unavailable reasons.
+See the [measurement contract](docs/measurement.md) for precise boundaries and
+[schema 1.1 compatibility notes](docs/measurement.md#v02-schema-and-execution-modes).
+
+## Reproduce the brief-event comparison
+
+The synthetic 60-second application clip contains an error only in `[24,26)`.
+Four uniform midpoints miss it. Four manual inputs can include it with the same
+frame count:
+
+```powershell
+.\.venv\Scripts\vidfit.exe compare --video examples/generated/brief-error.mp4 --question "What error message appeared?" --frame-budgets 4 --timestamps 7.5 24.375 37.5 52.5 --backend qwen3vl --execution-mode benchmark --warmup 1 --repeats 3 --fixture-manifest examples/generated/brief-error.truth.json --output-dir reports/comparison
 ```
 
-The default device is explicitly `cuda:0`, with `float16` weights and SDPA
-attention. There is no automatic device, model, precision, or budget fallback.
-CPU inference must be requested with `--device cpu --dtype float32`; it is not
-the reference performance path. Apple MPS, quantization, Flash Attention, and
-multi-GPU placement are outside scope. GPU memory depends on the frame budget,
-resolution, token limit, and runtime; see measured hardware in the validation
-record rather than treating a single GPU as a minimum requirement.
+Use `--execution-mode single` for one invocation per configuration, or
+`--backend inspect` to examine inputs without weights. With only `--timestamps`,
+the CLI runs only manual selection; explicit `--frame-budgets` adds uniform
+configurations. `--sampling manual` requires timestamps. The original uniform CLI
+and `VideoAnalyzer.compare(..., frame_budgets=[...])` defaults remain compatible.
+CLI comparison still defaults to **benchmark**: one first invocation, one warmup
+and three measured trials per configuration. Even `--warmup 0` keeps that first
+invocation unless single mode is selected.
 
-`--max-pixels` is a per-frame processed pixel cap. The native video processor
-rounds spatial dimensions and combines frames into temporal pairs. VidFit
-records effective dimensions and tensor shapes, verifies visual-token counts,
-disables secondary sampling, and explicitly records final-frame padding for odd
-budgets. Selected source previews are distinguished from normalized processed
-inputs. Qwen currently requires constant-frame-rate sources and at least two
-selected frames; inspection can also handle VFR and one-frame budgets.
+Observed on the reference GPU, with identical 262144-pixel caps, greedy generation
+and 128-token limits:
 
-Generation uses greedy decoding (`do_sample=False`, `num_beams=1`) and a default
-128-new-token limit. The model and processor resolve to the same commit SHA,
-which is recorded in the report. Use `--revision <resolved-sha>` when reproducing
-a run. Greedy decoding does not ensure identical floating-point behavior across
-different hardware or drivers.
+| Four-frame selection | Event overlap | Agent answer judgment | Visual tokens | Output tokens | Median generation / pipeline | Peak allocated / reserved |
+| --- | --- | --- | --- | --- | --- | --- |
+| Uniform | No | Incorrect: says no error appeared | 440 | 23 | 18.132 / 19.462 s | 4193.9 / 4260.0 MiB |
+| Manual | Yes | Partially correct: includes error plus unrelated status text | 440 | 14 | 11.937 / 13.725 s | 4193.9 / 4260.0 MiB |
 
-## Sampling and the synthetic event
-
-Targets are equal-bin midpoints:
-
-```text
-target_timestamp(i) = (i + 0.5) * duration / frame_budget
-```
-
-| Budget | Target examples for 60 seconds | Fixture event evidence |
-| --- | --- | --- |
-| 4 | 7.5, 22.5, 37.5, 52.5 s | Absent |
-| 8 | 3.75, 11.25, 18.75, 26.25, … s | Absent |
-| 16 | 1.875, 5.625, …, **24.375**, … s | Present |
-
-Each target maps to the nearest actual decoded presentation timestamp, choosing
-the earlier frame for a tie. Requested timestamps are not labeled as exact
-decoded timestamps. Reports retain both, plus original PTS, time base,
-presentation-order frame index, and SHA-256 of decoded RGB pixels. Targets are
-relative to the first presentation timestamp.
-
-Invalid budgets, empty/unreadable files, and insufficient distinct source frames
-produce explicit failures. No source frame is silently duplicated to meet the
-sampling budget. Native processor padding is a separate, reported operation.
-
-`--fixture-manifest` optionally adds fixture-based evidence coverage after
-verifying its video SHA-256. The truth manifest is separate from model inputs;
-its error text never enters the question, input filename, or processor metadata.
-Coverage is not a general accuracy metric or a claim that 16 frames must improve
-model accuracy.
+These are observations on one synthetic clip, not evidence of general accuracy or
+speed improvement. Answer lengths differ and timings vary with runtime/system
+load. [Actual answers, settings and validation](docs/v0.2-results.md) include the
+existing downloaded real-world sample. No accuracy improvement is required for
+the software to function.
 
 ## Python API
 
 ```python
-from vidfit import VideoAnalyzer
+from vidfit import SelectionSpec, VideoAnalyzer
 
-analyzer = VideoAnalyzer(backend="inspect")
-results = analyzer.compare(
-    video="examples/generated/brief-error.mp4",
-    question="What error message appeared?",
-    frame_budgets=[4, 8, 16],
-    sampling="uniform",
-    warmup=1,
-    repeats=3,
-    fixture_manifest="examples/generated/brief-error.truth.json",
+analyzer = VideoAnalyzer(backend="inspect")  # use qwen3vl for inference
+manual = SelectionSpec.manual([7.5, 24.375, 37.5, 52.5])
+metadata, preview_frames, setup_costs = analyzer.preview("video.mp4", manual)
+result = analyzer.compare(
+    "video.mp4",
+    "What error message appeared?",
+    selections=[SelectionSpec.uniform(4), manual],
+    execution_mode="single",
 )
-results.export_html("reports/comparison.html")
-results.export_json("reports/comparison.json")
-assert results.complete
+result.export_html("reports/comparison.html")
+result.export_json("reports/comparison.json")
+assert result.complete  # completion only; does not assert answer correctness
 ```
 
-For inference, construct `VideoAnalyzer(model="Qwen/Qwen3-VL-2B-Instruct",
-backend="qwen3vl", device="cuda:0", dtype="float16", max_pixels=262144)`.
-`results.configurations` contains typed dataclass records; `results.to_dict()`
-returns the JSON-ready experiment. Importing `VideoAnalyzer` does not import
-PyTorch or download anything.
+## Starter evaluation and development
 
-The CLI preserves successful configurations when another fails and exports
-partial results. Exit status is 0 for a complete experiment, 1 for incomplete
-configurations, and 2 for invalid top-level input. Use `vidfit compare --help`
-for all options. Treat a partial summary as incomplete.
-
-## Profiling and reproducibility
-
-By default, a comparison records one separate first invocation, then one warmup
-and three measured repetitions per configuration. Warmup and first-invocation
-results are retained but excluded from medians. Even `--warmup 0` retains the
-first invocation separately. Summaries include min, max, count, and sample
-standard deviation. Every measured trial has its own answer and costs.
-
-Each trial repeats streaming decode, selection, PNG capture, hashing,
-preprocessing, transfer, generation, and output text decoding. Pipeline latency
-covers those stages through final synchronization. Model loading is separate;
-the initial metadata pass, initial gallery extraction, and report writing are
-outside trial latency. The model and processor are reused across budgets;
-filesystem and CUDA allocator caches can be warm. The first call for a new
-budget is not described as a fresh-process cold start.
-
-CUDA stage boundaries are synchronized and peak memory counters reset before
-each trial. Allocated and reserved memory measure different PyTorch allocator
-quantities, include resident model weights, and do not measure total device use.
-Visual-token counts come from actual native processed IDs checked against the
-video grid, never an estimate from raw frame count. Missing metrics remain null
-with reasons. All timing fields use seconds and JSON memory fields use bytes.
-
-See [the measurement contract](docs/measurement.md) for exact boundaries, native
-processor checks, schema semantics, caching, and limitations. The integration
-follows the [official Qwen3-VL implementation](https://github.com/QwenLM/Qwen3-VL)
-and [PyTorch CUDA timing/memory guidance](https://docs.pytorch.org/docs/stable/notes/cuda.html).
-
-## Development and tests
-
-```sh
-python -m pip install -e ".[dev]"
-python -m pytest -q
-python -m ruff check .
-python -m ruff format --check .
-python -m build
-```
-
-The CI workflow is configured to run CPU tests, lint, wheel builds, and
-installed-wheel API/CLI smoke checks on Windows and Linux with Python 3.10 and 3.12. It does not download weights or
-install model dependencies. macOS setup is documented but is not in the CI matrix.
-
-Opt into the real-model integration test only after installing `[qwen]`:
+The [evaluation guide](docs/evaluation.md) documents five short clips, ten
+questions, download/generation checksums, source licenses, visual-review provenance,
+reference isolation, and explicit answer judgments. It includes real footage,
+synthetic sustained actions, brief events and unsupported questions. It is a
+starter collection for exercising the workflow, not a representative benchmark.
 
 ```powershell
+.\.venv\Scripts\python.exe -m pip install av==16.0.1 Pillow==12.0.0 numpy==2.2.6
+.\.venv\Scripts\python.exe examples/prepare_evaluation.py
+.\.venv\Scripts\vidfit.exe evaluate --collection examples/evaluation/starter.json --video-dir examples/generated/evaluation --backend inspect --output-dir reports/starter
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m ruff format --check .
+.\.venv\Scripts\python.exe -m build
+```
+
+Real-model checks are separate and opt-in, using the local cache:
+
+```powershell
+$env:HF_HOME = "$PWD/.cache/huggingface"
+$env:HF_HUB_OFFLINE = "1"
+$env:TRANSFORMERS_OFFLINE = "1"
 $env:VIDFIT_RUN_MODEL_TEST = "1"
 .\.venv\Scripts\python.exe -m pytest -q -m model
 ```
 
-```sh
-VIDFIT_RUN_MODEL_TEST=1 python -m pytest -q -m model
-```
+On Unix, use `VIDFIT_RUN_MODEL_TEST=1 python -m pytest -q -m model` and the
+corresponding `export` commands for offline cache variables. CPU CI covers Windows
+and Linux on Python 3.10 and 3.12; see [validation](docs/validation.md) for actual
+local checks and limits. [CONTRIBUTING.md](CONTRIBUTING.md) explains the workflow.
 
-This test runs real inference on all three budgets and validates input accounting
-without asserting that any answer must be correct. It uses a shorter 64-token
-limit and one measured repetition; use the CLI command above for the full
-default experiment. Ordinary processor doubles test bookkeeping and rejection
-paths only; they do not establish model correctness.
+## Limits and roadmap
 
-## Architecture and limits
+The adapter supports dense Qwen3-VL, one explicit CUDA device or explicit float32
+CPU inference. It does not support audio reasoning, MPS, VFR Qwen inputs,
+quantization, streaming, automatic OOM recovery or automatic frame selection.
+Long videos require repeated full decodes. Embedded PNG exports can be large.
+Gradio/browser playback support is narrower than PyAV decoding support.
 
-`VideoAnalyzer` coordinates a small pipeline. `core/video.py` streams PyAV frames
-and captures evidence; `core/sampling.py` defines midpoint targets;
-`core/schemas.py` holds results; `core/profiling.py` summarizes trials.
-`backends/inspection.py` records unavailable inference metrics;
-`backends/qwen3vl.py` validates native video inputs and runs the model.
-`evaluation/reports.py` produces escaped, offline HTML; `demo.py` creates the fixture.
+Next milestones: automatic/scene-aware frame selection, broader independently
+human-reviewed evaluation, additional backends, and budget recommendations.
+These are future work. Contributions that improve reproducibility, accessibility,
+CPU tests or annotation review are welcome.
 
-This is a CLI proof of concept. Large videos require a metadata decode plus
-fresh decodes for each trial. Reports embed full PNG evidence and can become
-large. No audio, batch concurrency, automatic OOM recovery, cross-version
-processor compatibility, or general answer-quality evaluation is included.
-Qwen VFR support requires a verified native timestamp representation and remains
-deferred. The synthetic demo is reproducible within the same dependency/FFmpeg
-environment; byte-identical encoding across library versions is not promised.
-
-Future work: Gradio/React interfaces, scene-change and manual sampling, budget
-recommendations, additional backends, streaming, and learned frame selection.
-These are not implemented in this milestone.
-
-## Contributing and licensing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md). VidFit source is licensed under
-[MIT](LICENSE). Model weights are separate: the
-[Qwen3-VL-2B-Instruct model card](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct)
-identifies their Apache-2.0 license. Downloading weights does not change their
-license or make them part of VidFit's MIT source distribution.
+VidFit source is [MIT](LICENSE). Model weights and downloaded clips retain their
+own licenses; the [Qwen model card](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct)
+identifies the model's Apache-2.0 license. Large videos, generated reports, weights
+and caches are excluded from Git.

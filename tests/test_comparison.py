@@ -32,7 +32,7 @@ def test_inspection_api_and_export(demo, tmp_path):
             assert trial.metrics["pipeline_s"] >= trial.metrics["decode_sampling_s"] > 0
             assert trial.evidence_hashes == [f.sha256_rgb for f in config.evidence]
     data = json.loads(result.export_json(tmp_path / "comparison.json").read_text())
-    assert data["schema_version"] == "1.0.0"
+    assert data["schema_version"] == "1.1.0"
     assert data["video"]["filename"] == "brief-error.mp4"
     assert data["model"]["identifier"] is None
     markup = result.export_html(tmp_path / "comparison.html").read_text(encoding="utf-8")

@@ -61,6 +61,11 @@ def summarize(trials: list) -> dict:
 def describe_error(exc: Exception) -> str:
     """Keep actionable errors while removing home/workspace paths from shareable reports."""
     message = str(exc)
+    if "out of memory" in message.lower():
+        message += (
+            " Reduce the frame budget, max-pixels or output-token limit and rerun. "
+            "No automatic fallback was applied."
+        )
     for path, label in ((Path.home(), "<home>"), (Path.cwd(), "<workspace>")):
         for variant in (str(path), path.as_posix()):
             message = message.replace(variant, label)

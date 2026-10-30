@@ -10,7 +10,7 @@ from typing import Any
 import av
 from PIL import Image
 
-from vidfit.core.sampling import midpoint_targets
+from vidfit.core.sampling import SelectionSpec
 from vidfit.core.schemas import FrameEvidence
 
 
@@ -101,7 +101,9 @@ def evidence_image(frame: FrameEvidence) -> Image.Image:
 
 
 def sample_video(path: str | Path, metadata: dict, budget: int) -> tuple[list[FrameEvidence], dict]:
-    targets = midpoint_targets(metadata["duration_s"], budget)
+    selection = budget if isinstance(budget, SelectionSpec) else SelectionSpec.uniform(budget)
+    targets = selection.targets(metadata["duration_s"])
+    budget = selection.count
     if budget > metadata["frame_count"]:
         raise ValueError(
             f"requested {budget} frames but video has {metadata['frame_count']} distinct frames"
@@ -131,5 +133,8 @@ def sample_video(path: str | Path, metadata: dict, budget: int) -> tuple[list[Fr
     except (av.FFmpegError, OSError) as exc:
         raise ValueError(f"sampling failed: {type(exc).__name__}") from exc
     if len(evidence) != budget or len({e.frame_index for e in evidence}) != budget:
-        raise ValueError("midpoint targets map to too few distinct frames; reduce the frame budget")
+        raise ValueError(
+            "selection targets must resolve to distinct frames; "
+            "space timestamps farther apart or reduce the frame budget"
+        )
     return evidence, {"decoded_frames": count, "decode_sampling_s": perf_counter() - start}

@@ -42,7 +42,10 @@ LABELS = {
 
 
 def render_html(result):
-    header_cells = "".join(f"<th>{c.requested_frames} frames</th>" for c in result.configurations)
+    header_cells = "".join(
+        f"<th>{escape(c.selection.get('method', 'uniform'))} · {c.requested_frames} frames</th>"
+        for c in result.configurations
+    )
     rows = []
     for key, label in LABELS.items():
         cells = []
@@ -71,13 +74,28 @@ def render_html(result):
                 else "No model answer is available."
             )
         )
-        coverage = config.validation.get("fixture_evidence_coverage")
-        coverage_html = ""
-        if coverage:
-            text = "Event captured" if coverage["overlaps_event"] else "Event absent"
-            coverage_html = (
-                f"<p class='coverage'>{text} — fixture-based evidence coverage; not accuracy.</p>"
+        coverage = config.validation.get("annotation_evidence_coverage") or config.validation.get(
+            "fixture_evidence_coverage"
+        )
+        coverage_html = "<p>Evidence coverage: Not annotated.</p>"
+        if coverage and coverage["overlaps_event"] is not None:
+            text = (
+                "Overlaps annotated event"
+                if coverage["overlaps_event"]
+                else "No overlap with annotated event"
             )
+            coverage_html = f"<p class='coverage'>Evidence coverage: {text}. This does not evaluate the answer.</p>"
+        evaluations = []
+        for trial in measured:
+            judgment = trial.evaluation
+            if judgment["verdict"] == "not_evaluated":
+                evaluations.append("Not evaluated (unreviewed)")
+            else:
+                evaluations.append(
+                    f"{judgment['verdict'].replace('_', ' ')} ({judgment['method']}; "
+                    f"{judgment.get('reviewer', '')}): {judgment.get('rationale', '')}"
+                )
+        evaluation_text = "; ".join(dict.fromkeys(evaluations)) or "Not evaluated"
         gallery = []
         for frame in config.evidence:
             event = bool(coverage and frame.frame_index in coverage["overlapping_frame_indices"])
@@ -107,15 +125,17 @@ def render_html(result):
             trials.append(
                 f"<details><summary>{escape(trial.phase)} #{trial.index} · {escape(trial.status)}</summary>"
                 f"<p class='answer'>{escape(trial.answer) if trial.answer is not None else escape(trial.unavailable_reasons.get('answer', 'Answer unavailable'))}</p>"
-                f"<p class='failure'>{escape(trial.error or '')}</p><table>{table}</table>"
+                f"<p class='failure'>{escape(trial.error or '')}</p><p>Answer evaluation: {pretty(trial.evaluation)}</p><table>{table}</table>"
                 f"<h4>Processor settings and effective inputs</h4><pre>{pretty(trial.processing)}</pre></details>"
             )
         cards.append(
-            f"<article><h2>{config.requested_frames} frames <span class='status'>{escape(config.status)}</span></h2>"
-            f"<p>{config.selected_frames} distinct source frames selected</p>{coverage_html}"
-            f"<div class='answer'>{escape(answer)}</div><p class='failure'>{escape(config.error or '')}</p>"
-            f"<h3>Source evidence</h3><p class='muted'>Click a frame to enlarge. In Qwen runs, "
-            f"these exact RGB pixels enter the video processor. Effective dimensions and padding appear below.</p>"
+            f"<article><h2>{escape(config.selection.get('method', 'uniform'))} · {config.requested_frames} frames <span class='status'>{'completed' if config.status == 'ok' else 'failed'}</span></h2>"
+            f"<h3>Model answer</h3><div class='answer'>{escape(answer)}</div>"
+            f"<p>Run status: {'completed' if config.status == 'ok' else 'failed'}. A completed run does not establish correctness.</p>{coverage_html}"
+            f"<p>Answer correctness: {escape(evaluation_text)}</p>"
+            f"<p class='failure'>{escape(config.error or '')}</p>"
+            f"<h3>Inputs provided to the model</h3><p class='muted'>Click a frame to enlarge. In Qwen runs, "
+            f"these RGB source frames enter the video processor. They are not model-verified citations or justification. Effective dimensions and padding appear below.</p>"
             f"<div class='gallery'>{''.join(gallery)}</div><h3>Every trial</h3>{''.join(trials)}"
             f"<details><summary>Summary statistics and validation</summary>"
             f"<pre>{pretty({'summary': config.summary, 'validation': config.validation})}</pre></details></article>"
@@ -146,25 +166,29 @@ table{{border-collapse:collapse;width:100%;font-size:14px}}th,td{{padding:13px 1
 .table-scroll{{overflow:auto;margin-top:20px}}.table-scroll table{{min-width:650px}}.definitions{{margin:36px 0;color:var(--muted)}}
 @media(max-width:600px){{main{{padding:16px}}h1{{font-size:36px}}article{{padding:16px}}.question{{font-size:20px}}}}
 </style></head><body><main><div class="eyebrow">Local video-language experiments</div><h1>VidFit</h1>
-<p class="banner">{escape(notice)}</p><p class="question">{escape(result.question)}</p>
+<p class="banner">{escape(notice)} · {escape(result.settings.get("execution_mode", "benchmark"))} mode</p><p class="question">{escape(result.question)}</p>
 <p>{escape(result.video["filename"])} · {result.video["duration_s"]:.3f} s · {result.video["width"]} × {result.video["height"]}
- · {result.video["frame_count"]} source frames</p><p class="muted">Run {escape(result.run_id)} · {escape(result.created_at_utc)}</p>
+ · {result.video["frame_count"]} source frames</p>
 <details><summary>Video identity, requested settings, model, and environment</summary>
-<pre>{pretty({"video": result.video, "settings": result.settings, "model": result.model, "environment": result.environment, "fixture": result.fixture, "schema_version": result.schema_version})}</pre></details>
-<h2>Measured comparison</h2><p class="muted">Medians and min–max ranges of successful measured trials. Warmups and the first invocation are excluded.</p>
-<div class="table-scroll"><table><thead><tr><th>Metric</th>{header_cells}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>
+<p>Run {escape(result.run_id)} · {escape(result.created_at_utc)}</p><pre>{pretty({"video": result.video, "settings": result.settings, "model": result.model, "environment": result.environment, "fixture": result.fixture, "annotation": result.annotation, "schema_version": result.schema_version})}</pre></details>
 <section class="configs">{"".join(cards)}</section>
+<details><summary>Advanced measurements</summary>
+<p>Latency is elapsed time to process input and generate an answer. Longer answers can take more time.
+Visual tokens measure the processed visual input size, not answer quality.
+GPU memory is PyTorch allocator use including model weights, not total device usage or a hardware minimum.</p>
+<p class="muted">Medians and min–max ranges of successful measured trials. Warmups and the first invocation are excluded.</p>
+<div class="table-scroll"><table><thead><tr><th>Metric</th>{header_cells}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></details>
 <section class="definitions"><h2>Measurement boundaries</h2>
 <p>Each trial decodes the video again. Decode + sample includes lossless PNG evidence capture and hashes.
 Pipeline latency starts before decoding and ends after output text decoding and CUDA synchronization.
 Preprocessing includes PNG-to-RGB conversion, native processor work, and input validation.
 Device transfer is timed separately. Generation includes visual encoding, prefill, and autoregressive decoding.
 Model loading, the initial metadata probe, initial gallery extraction, and report export are outside trial latency.</p>
-<p>One first invocation per comparison is recorded separately; it is not a fresh-process cold-start measurement.
-The model and processor are reused, filesystem caches may be warm, and the CUDA allocator cache is retained.
+<p>In benchmark mode, one first invocation per comparison is recorded separately; it is not a fresh-process cold-start measurement.
+Single mode runs exactly once per configuration with no warmup. The model and processor are reused, filesystem caches may be warm, and the CUDA allocator cache is retained.
 Peak allocated and reserved memory are PyTorch allocator measurements, include resident model weights,
 and are not total device memory usage. Peaks are reset for each trial and CUDA timing boundaries are synchronized.</p>
 <p>Visual tokens are counted from native processed input IDs and checked against the processed video grid.
 Unavailable values are null in JSON with per-trial reasons. Inspection mode runs no model and has no answer.
-Fixture coverage describes source evidence, not answer correctness. Reports contain the selected video frames.</p>
+Evidence coverage describes source inputs, not answer correctness. Agreement between answers is not accuracy. Reports contain the selected video frames.</p>
 </section></main></body></html>"""
