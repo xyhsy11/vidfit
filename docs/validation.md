@@ -180,3 +180,13 @@ and Gradio confirmed absent. UI help remains available there without UI imports.
 `pip check` passed. The final source UI restarted successfully on loopback with
 its width setting verified through its configuration endpoint; no inference is
 performed on launch.
+
+
+v0.2 publication: implementation commit
+`25b4525c251618d52f332e6b77d9dac36e214fad` was pushed to
+`codex/vidfit-v0.2` and the remote branch was verified against that exact commit.
+[PR #1](https://github.com/xyhsy11/vidfit/pull/1) targets `main`; it was opened through
+the configured GitHub CLI after the connector returned an integration-permission
+403. No default-branch merge, force push or unrelated history rewrite was performed.
+The remaining checklist/publication record is a separate documentation commit.
+Remote CI results, if still running, are not counted as passed local validation.
