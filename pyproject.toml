@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vidfit"
+version = "0.1.0"
+description = "A local-first workbench for inspecting video-language model evidence and inference costs"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = "MIT"
+dependencies = ["av>=16,<17", "Pillow>=12,<13", "numpy>=2,<3"]
+
+[project.optional-dependencies]
+qwen = ["torch==2.8.0", "torchvision==0.23.0", "transformers==4.57.6"]
+dev = ["pytest>=8,<10", "ruff>=0.14,<1", "build>=1.2,<2"]
+
+[project.scripts]
+vidfit = "vidfit.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vidfit"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src", "/tests", "/docs", "/examples/README.md", "/.github",
+  "/README.md", "/CONTRIBUTING.md", "/LICENSE", "/pyproject.toml", "/.gitignore",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Inline HTML/CSS template strings retain their natural layout.
+"src/vidfit/evaluation/reports.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["model: opt-in real Qwen inference (downloads weights and requires CUDA)"]
