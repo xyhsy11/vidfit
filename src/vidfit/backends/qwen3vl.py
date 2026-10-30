@@ -64,10 +64,12 @@ def prepare_video_inputs(processor, frames, metadata, question, max_pixels):
         video_metadata=[temporal],
         do_sample_frames=False,
         return_metadata=True,
-        return_tensors="pt",
+        return_tensors=None,
         size={"shortest_edge": 4096 * count, "longest_edge": max_pixels * count},
     )
+    # Metadata is not a tensor: retain it before tensorizing the BatchFeature.
     returned = inputs.pop("video_metadata")
+    inputs.convert_to_tensors("pt")
     if len(returned) != 1:
         raise ValueError("processor returned unexpected video metadata count")
     grid = inputs["video_grid_thw"].tolist()

@@ -7,7 +7,7 @@ from pathlib import Path
 from time import perf_counter
 
 from vidfit.backends.inspection import InspectionBackend
-from vidfit.core.profiling import INFERENCE_METRICS, environment, summarize
+from vidfit.core.profiling import INFERENCE_METRICS, describe_error, environment, summarize
 from vidfit.core.sampling import midpoint_targets
 from vidfit.core.schemas import Comparison, Configuration, Trial
 from vidfit.core.video import probe_video, sample_video
@@ -143,7 +143,7 @@ class VideoAnalyzer:
                             backend = Qwen3VLBackend(**self.options)
                         result.model = backend.info
                     except Exception as exc:
-                        load_error = f"{type(exc).__name__}: {exc}"
+                        load_error = describe_error(exc)
                         result.model = {
                             "identifier": self.options["model"],
                             "loading_error": load_error,
@@ -177,7 +177,7 @@ class VideoAnalyzer:
                         trial.unavailable_reasons.update(outcome.get("unavailable_reasons", {}))
                         backend.synchronize()
                     except Exception as exc:
-                        trial.status, trial.error = "failed", f"{type(exc).__name__}: {exc}"
+                        trial.status, trial.error = "failed", describe_error(exc)
                         config.status, config.error = "failed", trial.error
                         trial.unavailable_reasons["answer"] = "trial failed; no model answer"
                         for key, value in trial.metrics.items():
@@ -193,5 +193,5 @@ class VideoAnalyzer:
                     config.summary["measured_trials"] == repeats
                 )
             except Exception as exc:
-                config.status, config.error = "failed", f"{type(exc).__name__}: {exc}"
+                config.status, config.error = "failed", describe_error(exc)
         return result

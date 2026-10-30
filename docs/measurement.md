@@ -32,7 +32,9 @@ frames decoded within that trial, not the requested budget or metadata estimate.
 The adapter follows the [official Qwen3-VL processing path](https://github.com/QwenLM/Qwen3-VL)
 with `AutoProcessor`, `videos`, `video_metadata`, and native video placeholders.
 Already selected RGB arrays go directly to the processor with
-`do_sample_frames=False`. There is no second decoder and no image-input fallback.
+`do_sample_frames=False`. Returned video metadata is retained for validation,
+removed from the BatchFeature, and only then are inputs converted to tensors.
+There is no second decoder and no image-input fallback.
 `qwen-vl-utils` is unnecessary because VidFit has already decoded and sampled.
 
 The adapter is pinned to Transformers 4.57.6 and checks its actual outputs.

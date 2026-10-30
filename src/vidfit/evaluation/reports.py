@@ -114,8 +114,8 @@ def render_html(result):
             f"<article><h2>{config.requested_frames} frames <span class='status'>{escape(config.status)}</span></h2>"
             f"<p>{config.selected_frames} distinct source frames selected</p>{coverage_html}"
             f"<div class='answer'>{escape(answer)}</div><p class='failure'>{escape(config.error or '')}</p>"
-            f"<h3>Source evidence</h3><p class='muted'>Click a frame to enlarge. These exact RGB pixels "
-            f"are supplied to the video processor. Processed dimensions and temporal padding appear below.</p>"
+            f"<h3>Source evidence</h3><p class='muted'>Click a frame to enlarge. In Qwen runs, "
+            f"these exact RGB pixels enter the video processor. Effective dimensions and padding appear below.</p>"
             f"<div class='gallery'>{''.join(gallery)}</div><h3>Every trial</h3>{''.join(trials)}"
             f"<details><summary>Summary statistics and validation</summary>"
             f"<pre>{pretty({'summary': config.summary, 'validation': config.validation})}</pre></details></article>"
@@ -123,7 +123,7 @@ def render_html(result):
     notice = (
         INSPECTION_NOTICE
         if result.backend == "inspect"
-        else "Real model inference · sequential configurations"
+        else "Qwen backend · sequential configurations · inspect trial status below"
     )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

@@ -22,6 +22,13 @@ class MetadataDouble:
     frames_indices: list
 
 
+class BatchFeatureDouble(dict):
+    def convert_to_tensors(self, tensor_type):
+        assert "video_metadata" not in self
+        assert tensor_type == "pt"
+        return self
+
+
 class ProcessorDouble:
     video_processor = SimpleNamespace(temporal_patch_size=2, patch_size=16, merge_size=2)
     video_token_id = 42
@@ -52,12 +59,14 @@ class ProcessorDouble:
             decode=lambda *a, **k: "".join(f"<{ts:.1f} seconds>" for ts in times)
         )
         tokens = t * 4 - (1 if self.mode == "tokens" else 0)
-        return {
-            "video_metadata": [m],
-            "video_grid_thw": np.array([[t, 4, 4]]),
-            "pixel_values_videos": np.zeros((t * 16, 1536)),
-            "input_ids": np.array([[42] * tokens]),
-        }
+        return BatchFeatureDouble(
+            {
+                "video_metadata": [m],
+                "video_grid_thw": np.array([[t, 4, 4]]),
+                "pixel_values_videos": np.zeros((t * 16, 1536)),
+                "input_ids": np.array([[42] * tokens]),
+            }
+        )
 
 
 @pytest.mark.parametrize("count", [3, 4])

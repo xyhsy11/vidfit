@@ -3,6 +3,9 @@
 import importlib.metadata
 import platform
 import statistics
+from pathlib import Path
+
+import av
 
 INFERENCE_METRICS = (
     "preprocessing_s",
@@ -31,6 +34,7 @@ def environment() -> dict:
         "os_release": platform.release(),
         "architecture": platform.machine(),
         "packages": packages,
+        "ffmpeg_libraries": {k: ".".join(map(str, v)) for k, v in av.library_versions.items()},
     }
 
 
@@ -52,3 +56,12 @@ def summarize(trials: list) -> dict:
             else None
         )
     return summary
+
+
+def describe_error(exc: Exception) -> str:
+    """Keep actionable errors while removing home/workspace paths from shareable reports."""
+    message = str(exc)
+    for path, label in ((Path.home(), "<home>"), (Path.cwd(), "<workspace>")):
+        for variant in (str(path), path.as_posix()):
+            message = message.replace(variant, label)
+    return f"{type(exc).__name__}: {message}"
