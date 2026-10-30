@@ -90,14 +90,16 @@ libavfilter 11.4.100, libswscale 9.1.100, and libswresample 6.1.100.
 
 ## Publication status
 
-The public repository [xyhsy11/vidfit](https://github.com/xyhsy11/vidfit) was
-created and verified. Source is committed locally. The initial HTTPS push
-was rejected because the GitHub CLI OAuth token lacks the `workflow` scope
-needed to publish `.github/workflows/ci.yml`. The existing SSH key also needs
-an unlocked agent. No force push or unrelated repository update was attempted.
+Published to the public repository [xyhsy11/vidfit](https://github.com/xyhsy11/vidfit)
+on branch `main`, with branch tracking configured. The pushed branch was
+verified against the intended local commit. Only deliberate source,
+documentation, and tests were committed; generated videos, reports, model
+weights, caches, and local environments remain excluded. No force push or
+unrelated repository update was performed.
 
-The repository has no published `main` branch yet, so GitHub Actions has not
-run. Publication requires the account holder to run
-`gh auth refresh -h github.com -s workflow`, complete GitHub authentication,
-and resume the push. No token should be pasted into chat. The Windows/Linux
-CPU workflow is implemented but remote CI remains unverified until that push.
+[GitHub Actions run 41011710756](https://github.com/xyhsy11/vidfit/actions/runs/41011710756)
+passed for source commit `a458bc66301d58752a45252c59c11804d648833c` across
+Windows and Linux with Python 3.10 and 3.12. All four jobs passed installation,
+lint, formatting, ordinary tests, distribution builds, and installed-wheel
+API/CLI smoke checks without model downloads or GPU access. This publication
+record update changes documentation only.
