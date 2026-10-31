@@ -1,365 +1,330 @@
 # VidFit
 
-**Ask a video. Inspect the inputs. Compare the result.**
+**A local research workbench for frame selection and video-language models.**
 
-Video models can miss a brief event because the relevant frame never reached them.
-VidFit gives you a local interface to ask a question, see the answer beside the
-frames supplied to the model, edit those frames, and compare another run. It also
-records latency and GPU allocator memory, plus verified visual-token counts on
-the native Qwen path, for reproducible experiments.
+VidFit helps you study how the frames supplied to a video LLM affect its answers
+and computational cost. Inspect source frames and processor behavior, compare
+selection strategies, switch local models, and export the evidence behind each run.
+Use the web interface for exploration, the CLI for repeated experiments, or the
+Python API for your own selection policies.
 
-![VidFit local interface with real Qwen answers and selected input frames](docs/assets/interface.jpg)
+[Quick start](#quick-start) · [Models](#model-support) ·
+[Experiments](#run-a-selection-experiment) · [Measurements](#measurement-contract) ·
+[Documentation](#documentation) · [Contributing](#contributing)
 
-The screenshot records a real run before final width/caption polish; see
-[validation limits](docs/validation.md#v02-local-interface-release-2026-10-30).
+![Current VidFit interface with model controls, visual-change previews and real Qwen answers for two four-frame selections](docs/assets/interface-current.jpg)
 
-v0.2 includes a Gradio interface, uniform and manual timestamp selection, an
-experimental visual-change selector, an optional five-clip / ten-question
-evaluation starter set, and offline HTML / JSON exports.
+*Current interface on the synthetic demo: uniform four-frame inputs on the left,
+visual-change four-frame inputs on the right. These are real Qwen3-VL answers;
+the displayed judgments remain unreviewed. [Capture details](docs/validation.md#current-interface-screenshots-2026-10-31).*
 
-## Install and launch
+## What you can study
 
-Python **3.10–3.13** is supported; **3.12** is the verified local version.
-The real-model path was verified on Windows with an **RTX 3080 Laptop GPU, 16 GB**,
-PyTorch 2.8.0+cu128, Transformers 4.57.6 and cached
-`Qwen/Qwen3-VL-2B-Instruct`. This is a tested configuration, not a minimum GPU
-requirement. CPU tests need neither PyTorch nor weights.
+- **Frame selection:** compare uniform midpoints, manual timestamps, and a simple
+  visual-change baseline while preserving actual source indices, timestamps and RGB hashes.
+- **Native sampling:** trace how a supported Qwen processor selects frames and
+  compare its selection with VidFit's, without loading model weights.
+- **Model behavior:** submit the same selected source frames to different local
+  Hugging Face models, with explicit precision, revision and generation settings.
+- **Accuracy versus cost:** run selected-4 / uniform-4 / uniform-16 experiments,
+  include preprocessing in request time, and attach explicit answer judgments.
+- **Reproducible evidence:** retain per-trial answers, inputs, settings, failures,
+  timing and memory measurements in structured JSON and self-contained HTML.
 
-Windows PowerShell, from a new checkout:
+The visual-change selector is a baseline for experiments: it picks the largest
+change between consecutive 64×36 RGB thumbnails in each time bin, falling back to
+the midpoint in static bins. It uses neither the question nor evaluation references.
+Motion or a scene change does not necessarily identify useful evidence.
 
-```powershell
-git clone https://github.com/xyhsy11/vidfit.git
-cd vidfit
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
-.\.venv\Scripts\python.exe -m pip install -e ".[ui,vlm]"
-.\.venv\Scripts\vidfit.exe ui --backend auto
-```
+## Quick start
 
-A single local worker handles requests; model dependencies and weights load on Run.
-Open **http://127.0.0.1:7860**. The server binds to loopback, disables Gradio
-analytics and sharing, and serializes inference requests. Processing and inference
-stay on your computer. Initial package/model downloads require internet access;
-model downloads can be several GB. Reports contain your selected frames, so review
-them before sharing.
+### 1. Explore without a GPU or model weights
 
-On Linux, create/activate a Python 3.12 environment, install the appropriate
-[PyTorch build](https://pytorch.org/get-started/locally/), then:
+Use **Python 3.10–3.13**; Python **3.12** is the locally validated version.
+Clone the repository and create a virtual environment:
 
 ```sh
+git clone https://github.com/xyhsy11/vidfit.git
+cd vidfit
+python -m venv .venv
+```
+
+Activate the environment:
+
+- Linux / macOS: `source .venv/bin/activate`
+- Windows PowerShell: `.\.venv\Scripts\Activate.ps1`
+
+Then install the interface and generate a small synthetic video:
+
+```sh
+python -m pip install -e ".[ui]"
+vidfit demo --output examples/generated/brief-error.mp4
+vidfit ui --backend inspect --video examples/generated/brief-error.mp4
+```
+
+Open **http://127.0.0.1:7860**. Preview frames, change the selection, run an
+inspection, and download its report. Inspection produces **no model answer**;
+model-dependent measurements are marked unavailable. Reuse the demo file on later
+runs: the generator refuses to overwrite it.
+
+For CLI/API use without the interface, install `python -m pip install -e .`.
+The [Windows setup guide](docs/model-switching.md#windows-setup-alongside-the-original-environment)
+provides commands using full executable paths if you prefer not to activate an environment.
+
+### 2. Add local model inference
+
+The modern `vlm` profile pins PyTorch **2.8.0**, torchvision **0.23.0** and
+Transformers **5.5.4**. The locally tested NVIDIA configuration uses CUDA 12.8 wheels:
+
+```sh
+python -m pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
 python -m pip install -e ".[ui,vlm]"
-vidfit ui --backend auto
-```
-
-macOS supports the inspection path; Apple MPS inference is not implemented.
-Linux setup is supported by the package; GPU/UI validation here was on Windows.
-
-| Install | Purpose |
-| --- | --- |
-| `python -m pip install .` | Hardware-free inspection API / CLI; no model or UI imports |
-| `python -m pip install ".[ui]"` | Local interface with `vidfit ui --backend inspect` |
-| `python -m pip install ".[qwen]"` | Legacy Qwen3-VL runtime, Transformers 4.57.6 |
-| `python -m pip install ".[qwen35]"` | Qwen3-VL and Qwen3.5 runtime, Transformers 5.5.4 |
-| `python -m pip install ".[vlm]"` | Modern Qwen runtime plus compatible Transformers image-chat models |
-| `python -m pip install -e ".[dev]"` | Tests, Ruff and package build |
-| `python -m pip install -e ".[ui,vlm,dev]"` | Full modern development environment |
-
-The UI extra pins Gradio 6.0.2 and supports both runtime dependency ranges. Choose
-one model profile per environment. The legacy `qwen` pin conflicts with `qwen35`
-and `vlm`; use a separate environment to preserve old benchmarks. No PyPI
-publication is claimed; install from this checkout.
-
-For a hardware-free first look:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -e ".[ui]"
-.\.venv\Scripts\vidfit.exe demo --output examples/generated/brief-error.mp4
-.\.venv\Scripts\vidfit.exe ui --backend inspect --video examples/generated/brief-error.mp4
-```
-
-Inspection shows real decoded frames and exports, with **no model answer** and
-unavailable inference costs. The demo generator refuses to overwrite existing
-assets; reuse an existing file or choose a new path.
-
-## Switch models
-
-Install `.[ui,vlm]`, then choose a preset or enter a Hugging Face model ID in the
-interface. Preview again after changing model settings, then run without restarting
-the server. The same choice is available in the CLI through `--backend auto`:
-
-```powershell
-vidfit models
-vidfit ui --backend auto --model HuggingFaceTB/SmolVLM2-500M-Video-Instruct --dtype bfloat16
-vidfit ui --backend auto --model Qwen/Qwen3.5-2B --dtype bfloat16
 vidfit ui --backend auto --model Qwen/Qwen3-VL-2B-Instruct --dtype float16
 ```
 
-Automatic routing uses native video for supported dense Qwen checkpoints. Other
-compatible `AutoModelForImageTextToText` checkpoints receive chronological selected
-images with timestamp labels. Custom IDs are allowed; processors must satisfy
-the adapter's input checks. This does not promise support for every Hugging Face
-model. SmolVLM2 500M and LLaVA-OneVision 0.5B completed real 4- and 16-frame
-integration checks; this is not an accuracy claim. Untested presets are identified in the
-[model switching guide](docs/model-switching.md).
+This configuration was exercised on Windows with an RTX 3080 Laptop GPU (16 GB);
+it is a validation environment, not a minimum-memory requirement. CPU inference
+requires explicit `--device cpu --dtype float32`. Apple MPS is not implemented.
+Linux is covered by CPU CI; the recorded GPU runs were on Windows.
 
-The generic adapter reports visual tokens as unavailable, and verifies pixel
-budgets against actual processed views, including crops and padding. SmolVLM2 500M
-has a fixed 512×512 minimum per image. Native Qwen tracing and temporal-token checks
-remain specific to the native Qwen adapter. Existing `qwen`/`qwen3vl` backend
-commands keep that behavior; `transformers` explicitly selects the image adapter.
+In the UI, choose a model, upload a video and enter a question. Select frames,
+click **Preview selected frames**, then **Run selected settings**. Compare A/B
+selections or keep the previous result beside the next one. Changing model or
+selection settings requires a new preview. H.264 MP4 is the verified browser format.
 
-Use a separate virtual environment to retain the original benchmark runtime.
-The [model switching guide](docs/model-switching.md) gives complete Windows setup,
-CLI/API examples, offline use and validation limits. The same `--model`,
-`--revision`, and `--dtype` options work for comparisons and selection experiments.
-The native Qwen sampling trace uses the chosen checkpoint's processor without weights.
+Weights load on the first inference and download if uncached. Inference and video
+processing run locally; initial package/model downloads need internet access.
+The UI binds to loopback, disables Gradio sharing and analytics, and serializes
+requests. Exported reports embed selected frames, so review them before sharing.
 
-Thinking is requested off by default; opt in with `--thinking`. Reports distinguish
-the requested setting from whether the checkpoint's chat template can control it.
-A fixed template keeps its native behavior. Unsupported model classes, missing
-dependencies and incompatible processor outputs fail explicitly. Model weights are
-downloaded on first inference if not cached. No other model is substituted.
+Install from source; no PyPI release is claimed. Choose one model dependency
+profile per environment: `vlm` is the general starting point, while legacy `qwen`
+pins Transformers 4.57.6 for earlier Qwen3-VL experiments. Do not combine those
+profiles. See [runtime profiles and offline use](docs/model-switching.md).
 
-## Use your own video
+## Model support
 
-1. Upload a video and use the player to inspect it. H.264 MP4 is the verified
-   browser playback format. The core uses PyAV; no system FFmpeg executable is
-   needed for that path. Audio is not sent to the model.
-2. Choose a model and enter a question. Choose **Answer once**, a uniform frame
-   budget, then click **Preview selected frames** and **Run selected settings**.
-3. Read **Model answer** beside the timestamped input gallery. Click a frame to
-   enlarge it. Captions distinguish requested and actual source timestamps.
-4. Switch selection A to **manual**, enter seconds separated by commas or spaces,
-   preview again, and rerun. Your previous result remains next to the current one.
-5. Choose **Compare settings** to run A and B sequentially with the same question,
-   model and generation settings. Download the offline HTML report and structured
-   JSON below the results.
+`vidfit models` lists presets without downloading anything. In the UI, a preset
+sets precision and pixel limits. The CLI does not apply preset settings automatically;
+pass the appropriate `--dtype` and `--max-pixels` when changing models.
+`--backend auto` chooses an adapter from the checkpoint configuration.
 
-An edit to the video, selection or model settings invalidates the preview. Manual
-timestamps must be finite, inside `[0, duration)` and map to distinct source frames. Output frames
-are chronological. Mapping uses nearest decoded presentation timestamps, with the
-earlier frame winning a tie. Qwen requires at least two distinct frames and a
-constant-frame-rate video; inspection and compatible generic image processors can
-also use one-frame and VFR sources.
-Native Qwen temporal padding is recorded separately from selected source frames.
+![Model picker offering Qwen3-VL, Qwen3.5, SmolVLM2, LLaVA-OneVision and a custom Hugging Face model](docs/assets/model-selection.jpg)
 
-## Inspect how Qwen picks frames
+| Tested checkpoint | Input representation in VidFit | Tested precision | Native sampling trace |
+| --- | --- | --- | --- |
+| `Qwen/Qwen3-VL-2B-Instruct` | Native video | FP16 | Yes |
+| `Qwen/Qwen3.5-2B` | Native video | BF16 | Yes |
+| `HuggingFaceTB/SmolVLM2-500M-Video-Instruct` | Timestamped images | BF16 | No |
+| `llava-hf/llava-onevision-qwen2-0.5b-ov-hf` | Timestamped images | FP16 | No |
 
-Open **How Qwen picks frames** in the interface and click **Trace native sampling**.
-The trace compares **Selection A** with the actual Qwen3-VL video processor sampler:
+These checkpoints completed real inference and the starter selection experiment.
+The SmolVLM2 2.2B preset is available but has not been locally validated. Custom
+Hugging Face IDs work when the installed native `AutoModelForImageTextToText` class
+and processor satisfy the adapter's input checks. Remote Python code is disabled;
+compatibility with every visual LLM is not promised.
 
-- **Same frame count as Selection A** isolates the difference in frame placement.
-- **Processor default FPS** uses the loaded processor's sampling settings.
-- **Custom FPS** lets you change the native sampling rate and see its effect.
+**Input representation matters.** Qwen receives selected frames through its native
+video processor, without resampling. Generic models receive chronological images
+with timestamp labels, even if the model also supports native video. Equal frame
+counts do not imply equal visual-token counts, resolution or computational work.
+Generic visual-token counts remain unavailable until a mapping is verified.
 
-The trace shows source-frame thumbnails, every selected index and decoded timestamp,
-shared frames, effective settings and processor provenance. It also shows derived
-temporal groups and the index/FPS timestamps Qwen would use. Those are projections
-of the grouping rule; video preprocessing and model inference have not been run.
-Thumbnails are bounded and resized; all selected positions remain in the tables
-and downloadable JSON. Download the separate offline HTML to keep the comparison.
+The current LLaVA image path can be very slow at 16 frames on the tested runtime.
+[Diagnostics identified avoidable input-format and attention-dispatch costs](docs/validation.md#why-the-llava-16-frame-path-was-slow);
+the isolated optimizations have **not** been integrated into the application.
+Consult the [model guide](docs/model-switching.md) for processor constraints,
+pixel budgets, thinking controls and pinned revisions.
 
-Native sampling uses video metadata and sampling settings, not the question or
-visual content. VidFit's chosen selection still supplies the frames for answering;
-tracing does not change it. The trace requires a compatible `[qwen]`, `[qwen35]`
-or `[vlm]` profile; Qwen3.5 requires a modern profile. It downloads only configuration
-files if they are not cached. It loads no model weights and needs no GPU. Base inspection remains
-usable without Qwen dependencies.
+## Compare inputs and answers
 
-From the command line, with an existing video:
+For a first real comparison on the generated demo, run one inference per selection:
 
-```powershell
-.\.venv\Scripts\vidfit.exe trace --video examples/generated/brief-error.mp4 --frames 4 --output-dir reports/native-trace
-.\.venv\Scripts\vidfit.exe trace --video examples/generated/brief-error.mp4 --timestamps 7.5 24.375 37.5 52.5 --native-mode default --output-dir reports/native-default
-.\.venv\Scripts\vidfit.exe trace --video examples/generated/brief-error.mp4 --frames 4 --native-mode fps --native-fps 1 --output-dir reports/native-1fps
+```sh
+vidfit compare --video examples/generated/brief-error.mp4 --question "What error message appeared?" --frame-budgets 4 16 --backend auto --model Qwen/Qwen3-VL-2B-Instruct --dtype float16 --execution-mode single --max-new-tokens 64 --output-dir reports/uniform-comparison
 ```
 
-For API use, call `analyzer.trace_sampling(video, SelectionSpec.uniform(4))`.
-The result is a JSON-ready dictionary, separate from answer-comparison records.
-See [native sampling traces](docs/measurement.md#native-sampling-traces) for the
-sampling and timestamp contract.
+Open `reports/uniform-comparison/comparison.html` to inspect answers beside the
+actual input frames, or use `comparison.json` for analysis. Add
+`--timestamps 7.5 24.375 37.5 52.5` to include a manual four-frame selection that
+covers the demo's brief error. Evidence being present does not guarantee a correct answer.
 
-## Execution and result costs
+**Execution modes:** the UI defaults to one inference per configuration. CLI
+`compare` defaults to **benchmark**: one separate first invocation for the comparison,
+then one warmup and three measured trials per configuration. Use `--execution-mode single` as above
+for an initial check. Inference failures remain visible; VidFit does not silently
+change the model, precision, frame budget or device.
 
-**Answer once and Compare settings each run exactly one inference per selected
-configuration by default.** Enable the explicit benchmark checkbox for one
-separate first invocation, then the configured warmups and measured repetitions.
-The model is loaded once per request and reused across its configurations; loading,
-metadata probing, previews and exports are outside measured inference.
+### Trace native Qwen sampling
 
-Use `vidfit ui --max-pixels 131072 --max-new-tokens 64` to choose smaller explicit
-limits. There is no silent model, frame, precision or memory fallback. Unavailable
-CUDA, unsupported videos, invalid selections and run failures are surfaced in the
-interface or report. A single UI server serializes runs; separate CLI/server
-processes are the operator's responsibility.
+With the model dependencies installed, inspect the chosen Qwen processor's sampler:
 
-## Compare a visual-change selector with uniform sampling
-
-Choose **Visual changes** for Selection A or B in the UI, or use
-`SelectionSpec.visual_change(4)` in the API. This fixed baseline compares consecutive
-64×36 RGB thumbnails and selects the largest change in each equal-duration time
-bin. A static bin uses its midpoint. The selector receives neither your question
-nor evaluation references, and preserves the selected source frames and timestamps.
-It can select distracting motion; a large pixel change is not proof of relevance.
-
-For a complete experiment on the prepared starter collection:
-
-```powershell
-$env:HF_HOME = "$PWD/.cache/huggingface"
-$env:HF_HUB_OFFLINE = "1"
-$env:TRANSFORMERS_OFFLINE = "1"
-.\.venv\Scripts\vidfit.exe experiment --collection examples/evaluation/starter.json --video-dir examples/generated/evaluation --backend qwen3vl --repeats 2 --max-pixels 262144 --max-new-tokens 64 --output-dir reports/visual-change-run
+```sh
+vidfit trace --video examples/generated/brief-error.mp4 --model Qwen/Qwen3-VL-2B-Instruct --frames 4 --native-mode matched --output-dir reports/native-trace
 ```
 
-Use a new output directory for each run. The command compares visual-change 4 with
-**VidFit uniform midpoint 4 and 16**, not Qwen's native endpoint sampler. It loads
-one model, records two warmups, rotates method order and measures each request from
-metadata probing through the answer, including the selector and all preprocessing.
-Model startup and whole-experiment wall time are separate. All answers, frames,
-costs and failures remain in the reports.
+`matched` compares equal frame counts; `default` uses processor defaults; `fps`
+accepts `--native-fps`. The UI exposes the same workflow under **How Qwen picks frames**.
+The export records selected indices, decoded timestamps, overlap and processor
+provenance. It loads configuration files but **no weights**, and runs neither full
+visual preprocessing nor inference or attention analysis. Tracing does not change
+the frames used for answering. See the [sampling contract](docs/measurement.md#native-sampling-traces).
 
-`summary.html` and `summary.json` initially leave correctness unreviewed.
-`answers-for-review.json` deduplicates identical answers within each question and
-hides method, timing and frame-selection information. Explicit review records need
-`answer_id`, `verdict`, `method`, `reviewer` and `rationale`. Apply them with:
+![Native sampling report comparing VidFit visual-change frames with the Qwen processor's four selected frames](docs/assets/native-sampling.jpg)
 
-```powershell
-.\.venv\Scripts\vidfit.exe review-experiment --output-dir reports/visual-change-run --judgments reports/visual-change-run/review.json
+*The exported HTML report shows the exact source indices and decoded timestamps
+from the current processor trace. This sampling inspection runs without model inference.*
+
+<a id="compare-a-visual-change-selector-with-uniform-sampling"></a>
+
+## Run a selection experiment
+
+The experiment runner compares **visual-change 4**, **uniform midpoint 4**, and
+**uniform midpoint 16**. Uniform here means VidFit's sampler, not Qwen's native
+sampling policy. Each complete request includes source probing, decoding, selection,
+model preprocessing, transfer and inference; model loading is recorded separately.
+
+Prepare the five-clip, ten-question starter collection before running it:
+
+```sh
+python -m pip install av==16.0.1 Pillow==12.0.0 numpy==2.2.6
+python examples/prepare_evaluation.py
+vidfit experiment --collection examples/evaluation/starter.json --video-dir examples/generated/evaluation --backend auto --model Qwen/Qwen3-VL-2B-Instruct --dtype float16 --repeats 2 --max-pixels 262144 --max-new-tokens 64 --output-dir reports/selection-qwen3vl
 ```
 
-Raw comparison records are retained. Strict success means a correct supported
-answer or appropriate abstention on an unsupported question; partial answers are
-reported separately. Repeated runs are not additional independent questions. This
-small starter collection supports an exploratory comparison, not general accuracy
-claims or independent human certification.
+Preparation generates three synthetic clips and downloads two public source videos,
+verifying checksums and preserving license information. Encoder/library differences
+can change generated bytes; follow the [evaluation guide](docs/evaluation.md) if
+verification fails. Use a new output directory for each experiment. The runner
+loads one model, records two warmups, and rotates selection order across questions.
 
-The [real Qwen pilot results](docs/visual-change-results.md) report 60%, 60%, and
-70% strict success for visual-change 4, uniform 4, and uniform 16, with mean complete
-request times of 2.528, 2.576, and 3.574 seconds. This five-clip pilot found no overall
-accuracy gain over uniform 4; all preprocessing costs are included.
+| Output | Purpose |
+| --- | --- |
+| `summary.html` / `summary.json` | Aggregate costs, completion and reviewed correctness |
+| `answers-for-review.json` | Deduplicated answers with selection method and timing hidden |
+| `case-*/comparison.json` / `comparison.html` | Per-question answers, frames, settings and trials |
+| `case-*/comparison.raw.json` | Original comparison records retained when judgments are applied |
 
-## Interpret results
+Answers start **unreviewed**. Create explicit judgments against the independent
+rubrics, then apply them:
 
-- **Run status** says whether processing completed or failed. It is not a quality score.
-- **Evidence coverage** says whether selected timestamps overlap an optional
-  annotated interval. With no applicable annotation it is unavailable.
-- **Answer correctness** is **Not evaluated** until an explicit judgment is recorded.
-  Human, automated and agent judgments are labeled separately.
-- Displayed frames are **inputs provided to the model**, not model-verified
-  citations or explanations. Answer agreement is not accuracy.
-- **Latency** is elapsed work. Longer generated answers can take more time.
-  **Visual tokens** count processed visual input; **GPU memory** measures PyTorch
-  allocator peaks including resident weights, not total device use.
-
-Every benchmark trial retains its own answer, phase, measurements and evaluation.
-The offline HTML embeds frames and styling; JSON retains source indices, PTS,
-hashes, requested timestamps, selection method, settings and unavailable reasons.
-See the [measurement contract](docs/measurement.md) for precise boundaries and
-[schema 1.1 compatibility notes](docs/measurement.md#v02-schema-and-execution-modes).
-
-## Reproduce the brief-event comparison
-
-The synthetic 60-second application clip contains an error only in `[24,26)`.
-Four uniform midpoints miss it. Four manual inputs can include it with the same
-frame count:
-
-```powershell
-.\.venv\Scripts\vidfit.exe compare --video examples/generated/brief-error.mp4 --question "What error message appeared?" --frame-budgets 4 --timestamps 7.5 24.375 37.5 52.5 --backend qwen3vl --execution-mode benchmark --warmup 1 --repeats 3 --fixture-manifest examples/generated/brief-error.truth.json --output-dir reports/comparison
+```sh
+vidfit review-experiment --output-dir reports/selection-qwen3vl --judgments reports/selection-qwen3vl/review.json
 ```
 
-Use `--execution-mode single` for one invocation per configuration, or
-`--backend inspect` to examine inputs without weights. With only `--timestamps`,
-the CLI runs only manual selection; explicit `--frame-budgets` adds uniform
-configurations. `--sampling manual` requires timestamps. The original uniform CLI
-and `VideoAnalyzer.compare(..., frame_budgets=[...])` defaults remain compatible.
-CLI comparison still defaults to **benchmark**: one first invocation, one warmup
-and three measured trials per configuration. Even `--warmup 0` keeps that first
-invocation unless single mode is selected.
+Write `review.json` as a JSON array of objects containing `answer_id`, `verdict`,
+`method`, `reviewer` and `rationale`. Copy answer IDs from the review packet. Verdicts
+are `correct`, `partially_correct`, `incorrect` or `unanswerable`; methods are
+`human`, `agent` or `automated`. The [judgment guide](docs/evaluation.md#record-judgments)
+explains their meanings. Strict success
+means a fully correct supported answer or appropriate abstention on an unsupported
+question. Repeated trials do not create additional independent questions.
 
-Observed on the reference GPU, with identical 262144-pixel caps, greedy generation
-and 128-token limits:
-
-| Four-frame selection | Event overlap | Agent answer judgment | Visual tokens | Output tokens | Median generation / pipeline | Peak allocated / reserved |
-| --- | --- | --- | --- | --- | --- | --- |
-| Uniform | No | Incorrect: says no error appeared | 440 | 23 | 18.132 / 19.462 s | 4193.9 / 4260.0 MiB |
-| Manual | Yes | Partially correct: includes error plus unrelated status text | 440 | 14 | 11.937 / 13.725 s | 4193.9 / 4260.0 MiB |
-
-These are observations on one synthetic clip, not evidence of general accuracy or
-speed improvement. Answer lengths differ and timings vary with runtime/system
-load. [Actual answers, settings and validation](docs/v0.2-results.md) include the
-existing downloaded real-world sample. No accuracy improvement is required for
-the software to function.
+The [four-model experiment and LLaVA diagnosis](docs/validation.md#four-model-selection-comparison-and-llava-diagnosis-2026-10-31)
+record 240 measured requests with agent-reviewed answers. The earlier
+[Qwen-only pilot](docs/visual-change-results.md) is a separate experiment. These
+small studies exercise the research workflow; they are not a general model ranking
+or evidence that visual-change selection consistently improves accuracy.
 
 ## Python API
+
+Compare different selection policies on the same video and question:
 
 ```python
 from vidfit import SelectionSpec, VideoAnalyzer
 
-analyzer = VideoAnalyzer(backend="inspect")  # use auto with a compatible model for inference
-manual = SelectionSpec.manual([7.5, 24.375, 37.5, 52.5])
-metadata, preview_frames, setup_costs = analyzer.preview("video.mp4", manual)
+analyzer = VideoAnalyzer(
+    backend="auto",  # Use "inspect" to examine frames without model weights.
+    model="Qwen/Qwen3-VL-2B-Instruct",
+    dtype="float16",
+    max_new_tokens=64,
+)
 result = analyzer.compare(
-    "video.mp4",
+    "examples/generated/brief-error.mp4",
     "What error message appeared?",
-    selections=[SelectionSpec.uniform(4), manual],
+    selections=[
+        SelectionSpec.visual_change(4),
+        SelectionSpec.uniform(4),
+        SelectionSpec.uniform(16),
+    ],
     execution_mode="single",
 )
-result.export_html("reports/comparison.html")
-result.export_json("reports/comparison.json")
-assert result.complete  # completion only; does not assert answer correctness
+result.export_html("reports/selection-comparison.html")
+result.export_json("reports/selection-comparison.json")
 ```
 
-## Starter evaluation and development
+Use `SelectionSpec.manual(timestamps)` to supply frames chosen by your own policy.
+`analyzer.preview(video, selection)` decodes inputs without loading weights;
+`analyzer.trace_sampling(video, selection)` returns a separate native Qwen trace.
+For full request timing that includes source probing, use the experiment runner.
 
-The [evaluation guide](docs/evaluation.md) documents five short clips, ten
-questions, download/generation checksums, source licenses, visual-review provenance,
-reference isolation, and explicit answer judgments. It includes real footage,
-synthetic sustained actions, brief events and unsupported questions. It is a
-starter collection for exercising the workflow, not a representative benchmark.
+## Measurement contract
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install av==16.0.1 Pillow==12.0.0 numpy==2.2.6
-.\.venv\Scripts\python.exe examples/prepare_evaluation.py
-.\.venv\Scripts\vidfit.exe evaluate --collection examples/evaluation/starter.json --video-dir examples/generated/evaluation --backend inspect --output-dir reports/starter
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -m ruff check .
-.\.venv\Scripts\python.exe -m ruff format --check .
-.\.venv\Scripts\python.exe -m build
+| Record | Meaning and boundary |
+| --- | --- |
+| Source evidence | Video checksum, source frame indices, actual presentation timestamps and RGB hashes; manual timestamps map to the nearest frame, with earlier frames winning ties |
+| Processor/model provenance | Resolved checkpoint revisions, runtime versions, precision, representation and processor metadata; validation depth depends on the adapter |
+| Timing | Separate preprocessing, transfer, generation and text-decoding costs; `experiment` also includes probing and selection in complete-request time |
+| GPU memory | PyTorch peak allocated/reserved memory, including resident weights; not total device usage |
+| Visual tokens | Validated on the native Qwen path; unavailable with a reason for the generic image adapter |
+| Evaluation | Completion, annotated event overlap and explicitly reviewed answer correctness are separate fields |
+
+Ordinary `compare` measures trials after shared metadata setup; model loading,
+previews and exports are outside its trial timing. Experiment loading and warmups
+are also excluded from complete-request averages. Compare matching timing fields,
+not whichever number is smallest. Displayed frames are supplied inputs, not
+model-verified citations or explanations of its attention.
+
+For a reproducible result, record the VidFit commit, checkpoint and processor
+commits, dependency versions, hardware, source hashes, selection policy, precision,
+pixel/output budgets and review method. Pin Hugging Face checkpoints with
+`--revision <commit>`; the default `main` is mutable. Preserve input representation
+when interpreting cross-model costs. See the [full measurement contract](docs/measurement.md).
+
+## Documentation
+
+| Guide | Contents |
+| --- | --- |
+| [Model switching](docs/model-switching.md) | Runtime profiles, model controls, offline use and backend constraints |
+| [Measurement](docs/measurement.md) | Timing boundaries, source identity, native traces and export schema |
+| [Evaluation](docs/evaluation.md) | Starter media, licenses, references and explicit answer judgments |
+| [Validation](docs/validation.md) | Recorded tests, real inference, four-model results and diagnostic limits |
+| [Contributing](CONTRIBUTING.md) | Development practices, tests and measurement invariants |
+
+## Current limitations
+
+- Native video and sampling traces support dense Qwen3-VL and Qwen3.5 and require
+  constant-frame-rate video. Native Qwen inference needs at least two distinct
+  frames; a sampling trace can inspect a single frame.
+- Generic image adapters support only validated processor layouts. Their selected
+  images are not equivalent to a model's native video representation.
+- Audio, Apple MPS, quantization, streaming and automatic out-of-memory recovery
+  are not implemented. Inference uses one explicit CUDA device or float32 CPU.
+- Long videos require full decoding passes. Embedded frame images can make exports
+  large, and browser playback supports fewer formats than PyAV decoding.
+- The visual-change baseline is not question-aware. The starter set is small and
+  its references and published answer judgments have not had independent human review.
+
+## Contributing
+
+Useful contributions include native video adapters, verified attention/runtime
+profiling, new frame-selection policies, larger licensed evaluation sets and
+independent annotation review. Preserve source identity and measurement boundaries
+when extending the pipeline; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+```sh
+python -m pip install -e ".[dev]"
+python -m pytest -q
+python -m ruff check .
+python -m ruff format --check .
+python -m build
 ```
 
-Qwen native-video model checks are separate and opt-in, using the local cache:
+Ordinary tests require no model weights, CUDA or network access. Real model,
+processor and UI checks are opt-in; setup is documented in the guides above.
+For a [bug report](https://github.com/xyhsy11/vidfit/issues), include the command,
+model/revision, dependency versions, hardware and a minimal shareable reproduction.
 
-```powershell
-$env:HF_HOME = "$PWD/.cache/huggingface"
-$env:HF_HUB_OFFLINE = "1"
-$env:TRANSFORMERS_OFFLINE = "1"
-$env:VIDFIT_RUN_MODEL_TEST = "1"
-.\.venv\Scripts\python.exe -m pytest -q -m model
-```
-
-On Unix, use `VIDFIT_RUN_MODEL_TEST=1 python -m pytest -q -m model` and the
-corresponding `export` commands for offline cache variables. CPU CI covers Windows
-and Linux on Python 3.10 and 3.12; see [validation](docs/validation.md) for actual
-local checks and limits. [CONTRIBUTING.md](CONTRIBUTING.md) explains the workflow.
-
-## Limits and roadmap
-
-Native video supports dense Qwen3-VL and dense Qwen3.5. The generic adapter supports
-compatible Transformers image-chat checkpoints and recognized dense image layouts;
-its selected-image representation is not equivalent to native video. Inference uses
-one explicit CUDA device or explicit float32 CPU. It does not support audio
-reasoning, MPS, VFR Qwen inputs,
-quantization, streaming, automatic OOM recovery or question-aware frame selection.
-Long videos require repeated full decodes. Embedded PNG exports can be large.
-Gradio/browser playback support is narrower than PyAV decoding support.
-
-Next milestones: semantic/question-aware frame selection, broader independently
-human-reviewed evaluation, additional backends, and budget recommendations.
-These are future work. Contributions that improve reproducibility, accessibility,
-CPU tests or annotation review are welcome.
-
-VidFit source is [MIT](LICENSE). Model weights and downloaded clips retain their
-own licenses; the [Qwen model card](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct)
-identifies the model's Apache-2.0 license. Large videos, generated reports, weights
-and caches are excluded from Git.
+VidFit source is licensed under [MIT](LICENSE). Model weights and third-party
+videos retain their respective licenses. Generated reports, videos, weights and
+machine-specific caches are excluded from Git.
