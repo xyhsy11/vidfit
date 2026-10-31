@@ -5,13 +5,6 @@ import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 
 
-def _initialize(backend):
-    if backend == "qwen3vl":
-        from vidfit.backends.qwen3vl import preload_dependencies
-
-        preload_dependencies()
-
-
 def _ready():
     return True
 
@@ -22,16 +15,17 @@ class LocalWorker:
         self.executor = ProcessPoolExecutor(
             max_workers=1,
             mp_context=multiprocessing.get_context("spawn"),
-            initializer=_initialize,
-            initargs=(controller.analyzer.backend_name,),
         )
         atexit.register(self.close)
 
     def start(self):
         return self.executor.submit(_ready).result()
 
-    def preview(self, *args):
-        return self.executor.submit(self.controller.preview, *args).result()
+    def preview(self, *args, **kwargs):
+        return self.executor.submit(self.controller.preview, *args, **kwargs).result()
+
+    def trace(self, *args, **kwargs):
+        return self.executor.submit(self.controller.trace, *args, **kwargs).result()
 
     def run(self, *args, progress=None, **kwargs):
         if progress:

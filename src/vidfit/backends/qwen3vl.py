@@ -1,28 +1,57 @@
-"""Native Qwen3-VL video path, verified against Transformers 4.57.6.
+"""Native video input for the explicitly supported dense Qwen3-VL and Qwen3.5 families.
 
 Model dependencies are imported only on explicit backend construction. The processor
 receives only selected RGB evidence, source temporal metadata, and the question.
 """
 
 import hashlib
-import importlib.metadata
 import re
 from dataclasses import asdict
 from time import perf_counter
 
 import numpy as np
 
+from vidfit.backends.qwen_runtime import load_config, load_model_class
 from vidfit.core.video import evidence_image
 
 
-def prepare_video_inputs(processor, frames, metadata, question, max_pixels):
+def _format_chat_prompt(processor, messages, enable_thinking):
+    """Check whether this checkpoint's template actually responds to the mode flag."""
+    prompts = [
+        processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=mode
+        )
+        for mode in (enable_thinking, not enable_thinking)
+    ]
+    if not all(isinstance(prompt, str) for prompt in prompts):
+        raise ValueError("Qwen chat template must return one text prompt")
+    controlled = prompts[0] != prompts[1]
+    if enable_thinking and not controlled:
+        raise ValueError(
+            "This checkpoint's chat template does not support enable_thinking; "
+            "select a checkpoint with a controllable thinking template or omit --thinking"
+        )
+    return prompts[0], {
+        "requested": enable_thinking,
+        "effective": enable_thinking if controlled else None,
+        "template_controlled": controlled,
+        "definition": (
+            "Effective records the template mode, not a guarantee about generated reasoning. "
+            "An uncontrolled template retains its native behavior; disabled thinking is unverified."
+        ),
+    }
+
+
+def prepare_video_inputs(
+    processor, frames, metadata, question, max_pixels, *, enable_thinking=False
+):
     from transformers.video_utils import VideoMetadata
 
+    if not isinstance(enable_thinking, bool):
+        raise ValueError("enable_thinking must be a boolean")
     count = len(frames)
     if count < 2:
-        raise ValueError(
-            "Qwen3-VL requires at least 2 selected frames; use inspect for single frames"
-        )
+        raise ValueError("Qwen requires at least 2 selected frames; use inspect for single frames")
     fps = metadata["nominal_fps"]
     if not metadata["constant_frame_rate"] or not fps:
         raise ValueError(
@@ -56,7 +85,7 @@ def prepare_video_inputs(processor, frames, metadata, question, max_pixels):
             ],
         }
     ]
-    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    text, thinking = _format_chat_prompt(processor, messages, enable_thinking)
     # Native processor's size uses TOTAL pixels across T, not pixels per frame.
     inputs = processor(
         text=[text],
@@ -100,13 +129,15 @@ def prepare_video_inputs(processor, frames, metadata, question, max_pixels):
     prompt = processor.tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=False)
     # Native Qwen timestamps are averages within each temporal pair, rounded to 0.1 s.
     expected_times = [
-        (expected_indices[i] + expected_indices[i + 1]) / (2 * fps)
+        (expected_indices[i] / fps + expected_indices[i + 1] / fps) / 2
         for i in range(0, padded_count, 2)
     ]
     prompt_times = re.findall(r"<([0-9]+\.[0-9]+) seconds>", prompt)
     if prompt_times != [f"{ts:.1f}" for ts in expected_times]:
         raise ValueError("processor prompt timestamps disagree with selected temporal pairs")
     processing = {
+        "enable_thinking": enable_thinking,
+        "thinking": thinking,
         "native_video_input": True,
         "do_sample_frames": False,
         "requested_max_pixels_per_frame": max_pixels,
@@ -144,19 +175,24 @@ def preload_dependencies():
     """Import runtime classes before starting a UI event loop; no weights or inference."""
     try:
         import torch
-        from transformers import AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration
+        from transformers import AutoProcessor
     except ImportError as exc:
         raise RuntimeError(
-            "Qwen dependencies missing; install vidfit[qwen] in your virtualenv"
+            'Qwen dependencies missing; install ".[qwen]" or ".[qwen35]" in your environment'
         ) from exc
-    return torch, AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration
+    return torch, AutoProcessor
 
 
-class Qwen3VLBackend:
-    def __init__(self, model, device, dtype, max_pixels, max_new_tokens, revision):
-        torch, AutoConfig, AutoProcessor, Qwen3VLForConditionalGeneration = preload_dependencies()
-        if importlib.metadata.version("transformers") != "4.57.6":
-            raise RuntimeError("this adapter requires the verified transformers==4.57.6 processor")
+class QwenBackend:
+    def __init__(
+        self, model, device, dtype, max_pixels, max_new_tokens, revision, enable_thinking=False
+    ):
+        if not isinstance(enable_thinking, bool):
+            raise ValueError("enable_thinking must be a boolean")
+        start = perf_counter()
+        config, version = load_config(model, revision)
+        model_class = load_model_class(config, version)
+        torch, AutoProcessor = preload_dependencies()
         self.torch, self.device = torch, torch.device(device)
         if self.device.type == "cuda":
             if not torch.cuda.is_available():
@@ -166,25 +202,27 @@ class Qwen3VLBackend:
                 )
             if self.device.index >= torch.cuda.device_count():
                 raise ValueError("requested CUDA device does not exist")
-            if dtype == "bfloat16" and not torch.cuda.is_bf16_supported():
-                raise ValueError("requested bfloat16 is not supported by this GPU")
+            if dtype == "bfloat16":
+                with torch.cuda.device(self.device):
+                    if not torch.cuda.is_bf16_supported():
+                        raise ValueError("requested bfloat16 is not supported by this GPU")
         elif dtype != "float32":
             raise ValueError(
                 "CPU inference requires explicit --dtype float32 in this proof of concept"
             )
         self.max_pixels, self.max_new_tokens = max_pixels, max_new_tokens
-        start = perf_counter()
-        config = AutoConfig.from_pretrained(model, revision=revision, trust_remote_code=False)
-        if config.model_type != "qwen3_vl":
-            raise ValueError("model must be a dense Qwen3-VL checkpoint")
+        self.enable_thinking = enable_thinking
         resolved = config._commit_hash
-        if not resolved:
-            raise ValueError("model must resolve to a Hugging Face commit for reproducibility")
         self.processor = AutoProcessor.from_pretrained(
             model, revision=resolved, trust_remote_code=False
         )
+        _, thinking = _format_chat_prompt(
+            self.processor,
+            [{"role": "user", "content": [{"type": "video"}, {"type": "text", "text": ""}]}],
+            enable_thinking,
+        )
         self.model = (
-            Qwen3VLForConditionalGeneration.from_pretrained(
+            model_class.from_pretrained(
                 model,
                 revision=resolved,
                 config=config,
@@ -198,6 +236,13 @@ class Qwen3VLBackend:
         self.synchronize()
         self.info = {
             "identifier": model,
+            "input_representation": "native_video",
+            "adapter": "qwen",
+            "model_type": config.model_type,
+            "model_class": type(self.model).__name__,
+            "transformers_version": version,
+            "enable_thinking": enable_thinking,
+            "thinking": thinking,
             "processor_identifier": model,
             "requested_revision": revision,
             "resolved_revision": resolved,
@@ -237,6 +282,7 @@ class Qwen3VLBackend:
             metadata,
             question,
             self.max_pixels,
+            enable_thinking=self.enable_thinking,
         )
         self.synchronize()
         preprocessing_s = perf_counter() - start
@@ -302,3 +348,7 @@ class Qwen3VLBackend:
             "processing": processing,
             "unavailable_reasons": unavailable,
         }
+
+
+# Preserve the public import used by existing callers while dispatching by checkpoint config.
+Qwen3VLBackend = QwenBackend

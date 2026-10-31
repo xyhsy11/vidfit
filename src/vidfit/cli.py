@@ -7,18 +7,34 @@ from pathlib import Path
 
 from vidfit import SelectionSpec, VideoAnalyzer, __version__
 from vidfit.backends.inspection import INSPECTION_NOTICE
+from vidfit.backends.registry import MODEL_PRESETS, backend_names
 from vidfit.core.schemas import Comparison
 from vidfit.demo import generate_demo
 
 
 def model_options(command):
-    command.add_argument("--backend", choices=["inspect", "qwen3vl"], default="inspect")
+    command.add_argument(
+        "--backend",
+        choices=backend_names(),
+        default="inspect",
+        help=(
+            "auto routes by model config; transformers uses timestamped images; "
+            "inspect loads no model"
+        ),
+    )
     command.add_argument("--model", default="Qwen/Qwen3-VL-2B-Instruct")
     command.add_argument("--revision", default="main", help="HF revision; resolved SHA recorded")
     command.add_argument("--device", default="cuda:0", help="Explicit cpu or cuda:N; no fallback")
     command.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="float16")
     command.add_argument("--max-pixels", type=int, default=262144, help="Pixel cap per frame")
     command.add_argument("--max-new-tokens", type=int, default=128)
+    command.add_argument(
+        "--thinking",
+        dest="enable_thinking",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable model thinking explicitly (off by default)",
+    )
 
 
 def make_analyzer(args):
@@ -33,6 +49,7 @@ def make_analyzer(args):
                 "dtype",
                 "max_pixels",
                 "max_new_tokens",
+                "enable_thinking",
             )
         }
     )
@@ -44,6 +61,8 @@ def parser() -> argparse.ArgumentParser:
     )
     root.add_argument("--version", action="version", version=f"vidfit {__version__}")
     commands = root.add_subparsers(dest="command", required=True)
+    models = commands.add_parser("models", help="List local model presets (no downloads)")
+    models.add_argument("--json", action="store_true", help="Print the preset catalog as JSON")
     demo = commands.add_parser("demo", help="Generate the synthetic brief-error video")
     demo.add_argument("--output", type=Path, required=True)
     compare = commands.add_parser(
@@ -52,7 +71,9 @@ def parser() -> argparse.ArgumentParser:
     compare.add_argument("--video", type=Path, required=True)
     compare.add_argument("--question", required=True)
     compare.add_argument("--frame-budgets", type=int, nargs="+", default=None)
-    compare.add_argument("--sampling", choices=["uniform", "manual"], default="uniform")
+    compare.add_argument(
+        "--sampling", choices=["uniform", "manual", "visual_change"], default="uniform"
+    )
     compare.add_argument(
         "--timestamps",
         type=float,
@@ -76,7 +97,26 @@ def parser() -> argparse.ArgumentParser:
     ui.add_argument("--video", type=Path, help="Optional initial local video")
     ui.add_argument("--port", type=int, default=7860)
     model_options(ui)
-    ui.set_defaults(backend="qwen3vl")
+    ui.set_defaults(backend="auto")
+    trace = commands.add_parser(
+        "trace", help="Trace native Qwen sampling against VidFit; no model weights or inference"
+    )
+    trace.add_argument("--video", type=Path, required=True)
+    selection = trace.add_mutually_exclusive_group()
+    selection.add_argument("--frames", type=int, default=4, help="VidFit uniform frame budget")
+    selection.add_argument("--timestamps", type=float, nargs="+", help="VidFit manual seconds")
+    trace.add_argument(
+        "--native-mode",
+        choices=["matched", "default", "fps"],
+        default="matched",
+        help="Match VidFit's frame count, use processor defaults, or set native FPS",
+    )
+    trace.add_argument("--native-fps", type=float, help="Required only with --native-mode fps")
+    trace.add_argument("--model", default="Qwen/Qwen3-VL-2B-Instruct")
+    trace.add_argument(
+        "--revision", default="main", help="Processor revision; resolved SHA recorded"
+    )
+    trace.add_argument("--output-dir", type=Path, required=True)
     judge = commands.add_parser("judge", help="Record an explicit judgment of one exported answer")
     judge.add_argument("--report", type=Path, required=True)
     judge.add_argument("--configuration", type=int, required=True, help="Zero-based index")
@@ -98,6 +138,18 @@ def parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--output-dir", type=Path, required=True)
     evaluate.add_argument("--frames", type=int, default=4)
     model_options(evaluate)
+    experiment = commands.add_parser(
+        "experiment", help="Compare visual-change 4 with uniform 4/16; time full requests"
+    )
+    experiment.add_argument("--collection", type=Path, required=True)
+    experiment.add_argument("--video-dir", type=Path, required=True)
+    experiment.add_argument("--output-dir", type=Path, required=True)
+    experiment.add_argument("--repeats", type=int, default=2)
+    model_options(experiment)
+    experiment.set_defaults(backend="auto", max_new_tokens=64)
+    review = commands.add_parser("review-experiment", help="Apply explicit answer judgments")
+    review.add_argument("--output-dir", type=Path, required=True)
+    review.add_argument("--judgments", type=Path, required=True)
     return root
 
 
@@ -116,6 +168,20 @@ def export(result, output):
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
     try:
+        if args.command == "models":
+            if args.json:
+                print(json.dumps(MODEL_PRESETS, indent=2, ensure_ascii=False))
+            else:
+                for preset in MODEL_PRESETS:
+                    print(
+                        f"{preset['name']}: {preset['model']} "
+                        f"(dtype={preset['dtype']}, max_pixels={preset['max_pixels']})"
+                    )
+                print(
+                    "Use --backend auto --model MODEL_ID. Custom native HF image-text models "
+                    "are accepted when their processor satisfies the adapter's checks."
+                )
+            return 0
         if args.command == "demo":
             video, manifest = generate_demo(args.output)
             print(f"Synthetic video: {video}\nSeparate ground truth: {manifest}")
@@ -124,6 +190,31 @@ def main(argv=None) -> int:
             from vidfit.ui import launch
 
             launch(make_analyzer(args), video=args.video, port=args.port)
+            return 0
+        if args.command == "trace":
+            from vidfit.evaluation.sampling_trace import export_sampling_trace
+
+            selection = (
+                SelectionSpec.manual(args.timestamps)
+                if args.timestamps is not None
+                else SelectionSpec.uniform(args.frames)
+            )
+            trace = VideoAnalyzer(
+                backend="inspect", model=args.model, revision=args.revision
+            ).trace_sampling(
+                args.video,
+                selection,
+                native_mode=args.native_mode,
+                native_fps=args.native_fps,
+            )
+            markup, data = export_sampling_trace(trace, args.output_dir)
+            print("Native Qwen sampling trace. No model weights loaded or inference run.")
+            print(
+                f"VidFit: {trace['vidfit']['selected_frames']} frames; "
+                f"Qwen: {trace['native']['selected_frames']} frames; "
+                f"shared source frames: {len(trace['comparison']['shared_frame_indices'])}"
+            )
+            print(f"HTML: {markup}\nJSON: {data}")
             return 0
         if args.command == "judge":
             from vidfit.evaluation.annotations import record_judgment
@@ -139,7 +230,28 @@ def main(argv=None) -> int:
                 args.reviewer,
             )
             return export(result, args.output_dir)
+        if args.command == "review-experiment":
+            from vidfit.experiment import apply_experiment_judgments
+
+            apply_experiment_judgments(
+                args.output_dir, json.loads(args.judgments.read_text(encoding="utf-8"))
+            )
+            print(f"Reviewed summary: {args.output_dir / 'summary.html'}")
+            return 0
         analyzer = make_analyzer(args)
+        if args.command == "experiment":
+            from vidfit.experiment import run_selection_experiment
+
+            summary = run_selection_experiment(
+                args.collection,
+                args.video_dir,
+                args.output_dir,
+                analyzer=analyzer,
+                repeats=args.repeats,
+            )
+            print(f"Experiment summary: {args.output_dir / 'summary.html'}")
+            print("Answers remain unreviewed until explicit judgments are recorded.")
+            return 0 if summary["experiment"]["status"] == "complete" else 1
         if args.command == "evaluate":
             from vidfit.evaluation.annotations import read_collection
 
@@ -162,10 +274,17 @@ def main(argv=None) -> int:
             return int(failed)
         if args.sampling == "manual" and not args.timestamps:
             raise ValueError("--sampling manual requires --timestamps; no uniform fallback")
+        if args.sampling == "visual_change" and args.timestamps:
+            raise ValueError("--sampling visual_change cannot be combined with --timestamps")
+        budget_selection = (
+            SelectionSpec.visual_change
+            if args.sampling == "visual_change"
+            else SelectionSpec.uniform
+        )
         selections = []
         if args.frame_budgets is not None or not args.timestamps:
             selections += [
-                SelectionSpec.uniform(b)
+                budget_selection(b)
                 for b in (args.frame_budgets if args.frame_budgets is not None else [4, 8, 16])
             ]
         selections += [SelectionSpec.manual(t) for t in (args.timestamps or [])]

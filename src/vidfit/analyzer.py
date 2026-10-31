@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 
-from vidfit.backends.inspection import InspectionBackend
+from vidfit.backends.registry import backend_names, create_backend
 from vidfit.core.profiling import INFERENCE_METRICS, describe_error, environment, summarize
 from vidfit.core.sampling import SelectionSpec
 from vidfit.core.schemas import Comparison, Configuration, Trial
@@ -24,9 +24,12 @@ class VideoAnalyzer:
         max_pixels=262144,
         max_new_tokens=128,
         revision="main",
+        enable_thinking=False,
     ):
-        if backend not in ("inspect", "qwen3vl"):
-            raise ValueError("backend must be inspect or qwen3vl")
+        if backend not in backend_names():
+            raise ValueError(f"backend must be one of {', '.join(backend_names())}")
+        if not isinstance(enable_thinking, bool):
+            raise ValueError("enable_thinking must be a boolean")
         if device != "cpu" and not (device.startswith("cuda:") and device[5:].isdigit()):
             raise ValueError("device must be cpu or cuda:N")
         if dtype not in ("float16", "bfloat16", "float32"):
@@ -49,6 +52,7 @@ class VideoAnalyzer:
             max_pixels=max_pixels,
             max_new_tokens=max_new_tokens,
             revision=revision,
+            enable_thinking=enable_thinking,
         )
 
     def preview(self, video, selection):
@@ -58,12 +62,36 @@ class VideoAnalyzer:
         self._validate_backend_selection(metadata, frames)
         return metadata, frames, metrics
 
+    def trace_sampling(self, video, selection, *, native_mode="matched", native_fps=None):
+        """Compare native processor sampling with VidFit, without loading model weights.
+
+        This independent inspection does not change preview or inference selections.
+        Qwen dependencies and processor configuration load only on this explicit call.
+        """
+        from vidfit.native_trace import create_sampling_trace
+
+        if self.backend_name == "transformers":
+            raise ValueError(
+                "Native frame sampling traces are available only for supported Qwen video "
+                "processors. The Transformers image adapter receives VidFit's selected frames."
+            )
+        return create_sampling_trace(
+            video,
+            selection,
+            model=self.options["model"],
+            revision=self.options["revision"],
+            native_mode=native_mode,
+            native_fps=native_fps,
+        )
+
     def _validate_backend_selection(self, metadata, frames):
-        if self.backend_name == "qwen3vl":
+        if self.backend_name in ("qwen", "qwen3vl"):
             if len(frames) < 2:
-                raise ValueError("Qwen3-VL requires at least 2 distinct selected frames")
+                raise ValueError("Qwen video input requires at least 2 distinct selected frames")
             if not metadata["constant_frame_rate"]:
-                raise ValueError("Qwen3-VL requires constant-frame-rate video; use inspect for VFR")
+                raise ValueError(
+                    "Qwen video input requires constant-frame-rate video; use inspect for VFR"
+                )
 
     def compare(
         self,
@@ -145,13 +173,18 @@ class VideoAnalyzer:
                     "num_beams": 1,
                     "max_new_tokens": self.options["max_new_tokens"],
                     "use_cache": True,
+                    "enable_thinking": self.options["enable_thinking"],
                 },
                 "trial_policy": (
                     "exactly one measured invocation per selection; no warmup or hidden calls"
                     if execution_mode == "single"
                     else "one first invocation, then warmup and measured trials per selection"
                 ),
-                "sampling_mapping": "nearest actual PTS; ties choose earlier frame",
+                "sampling_mapping": (
+                    "per-selection mapping; see each configuration's selection provenance"
+                    if any(s.method == "visual_change" for s in selections)
+                    else "nearest actual PTS; ties choose earlier frame"
+                ),
             },
             environment=environment(),
             model={},
@@ -164,6 +197,9 @@ class VideoAnalyzer:
             try:
                 notify(f"Previewing {selection.method} / {selection.count} frames (setup)")
                 config.evidence, config.setup = sample_video(video, metadata, selection)
+                selection_trace = config.setup.pop("selection_trace", None)
+                if selection_trace is not None:
+                    config.selection["trace"] = selection_trace
                 self._validate_backend_selection(metadata, config.evidence)
                 config.selected_frames = len(config.evidence)
                 config.selection["target_timestamps_s"] = [
@@ -186,12 +222,7 @@ class VideoAnalyzer:
                 if backend is None and load_error is None:
                     try:
                         notify("Loading backend (setup; outside measured inference)")
-                        if self.backend_name == "inspect":
-                            backend = InspectionBackend()
-                        else:
-                            from vidfit.backends.qwen3vl import Qwen3VLBackend
-
-                            backend = Qwen3VLBackend(**self.options)
+                        backend = create_backend(self.backend_name, **self.options)
                         result.model = backend.info
                     except Exception as exc:
                         load_error = describe_error(exc)
@@ -221,6 +252,7 @@ class VideoAnalyzer:
                         backend.reset_peak_memory()
                         started = perf_counter()
                         frames, decode_metrics = sample_video(video, metadata, selection)
+                        selection_trace = decode_metrics.pop("selection_trace", None)
                         trial.metrics.update(decode_metrics)
                         trial.evidence_hashes = [e.sha256_rgb for e in frames]
 
@@ -238,6 +270,8 @@ class VideoAnalyzer:
                         outcome = backend.run(frames, metadata, question)
                         trial.answer = outcome["answer"]
                         trial.processing = outcome["processing"]
+                        if selection_trace is not None:
+                            trial.processing["selection_trace"] = selection_trace
                         trial.metrics.update(outcome["metrics"])
                         trial.unavailable_reasons.update(outcome.get("unavailable_reasons", {}))
                         backend.synchronize()
