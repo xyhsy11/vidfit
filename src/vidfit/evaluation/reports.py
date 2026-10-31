@@ -25,8 +25,13 @@ def metric(value, key):
 
 
 LABELS = {
+    "end_to_end_s": "Complete request time",
+    "input_preparation_s": "Input preparation (included in total)",
+    "probe_s": "Metadata probe + hash",
     "pipeline_s": "Pipeline latency",
     "decode_sampling_s": "Decode + sample",
+    "visual_change_scan_s": "Visual-change scan (within decode + sample)",
+    "visual_change_capture_s": "Visual-change frame capture (within decode + sample)",
     "preprocessing_s": "Model preprocessing",
     "device_transfer_s": "Device transfer",
     "generation_s": "Generation",
@@ -40,6 +45,14 @@ LABELS = {
     "model_input_frames": "Model-input frames (including padding)",
 }
 
+OPTIONAL_METRICS = {
+    "end_to_end_s",
+    "input_preparation_s",
+    "probe_s",
+    "visual_change_scan_s",
+    "visual_change_capture_s",
+}
+
 
 def render_html(result):
     header_cells = "".join(
@@ -48,6 +61,10 @@ def render_html(result):
     )
     rows = []
     for key, label in LABELS.items():
+        if key in OPTIONAL_METRICS and not any(
+            config.summary.get("metrics", {}).get(key) for config in result.configurations
+        ):
+            continue
         cells = []
         for config in result.configurations:
             stats = config.summary.get("metrics", {}).get(key)
@@ -134,8 +151,8 @@ def render_html(result):
             f"<p>Run status: {'completed' if config.status == 'ok' else 'failed'}. A completed run does not establish correctness.</p>{coverage_html}"
             f"<p>Answer correctness: {escape(evaluation_text)}</p>"
             f"<p class='failure'>{escape(config.error or '')}</p>"
-            f"<h3>Inputs provided to the model</h3><p class='muted'>Click a frame to enlarge. In Qwen runs, "
-            f"these RGB source frames enter the video processor. They are not model-verified citations or justification. Effective dimensions and padding appear below.</p>"
+            f"<h3>Inputs provided to the model</h3><p class='muted'>Click a frame to enlarge. "
+            f"These are the selected RGB source frames. They are not model-verified citations or justification. The adapter's input format, resizing, processor dimensions and padding are recorded in provenance below.</p>"
             f"<div class='gallery'>{''.join(gallery)}</div><h3>Every trial</h3>{''.join(trials)}"
             f"<details><summary>Summary statistics and validation</summary>"
             f"<pre>{pretty({'summary': config.summary, 'validation': config.validation})}</pre></details></article>"
@@ -143,8 +160,43 @@ def render_html(result):
     notice = (
         INSPECTION_NOTICE
         if result.backend == "inspect"
-        else "Qwen backend · sequential configurations · inspect trial status below"
+        else f"{result.model.get('identifier', result.settings.get('model', 'Local model'))} · "
+        f"{result.model.get('input_representation', result.backend).replace('_', ' ')} · "
+        "sequential configurations · inspect trial status below"
     )
+    if result.settings.get("execution_mode") == "selection_experiment":
+        statistics_notice = (
+            "Medians and min–max ranges of successful measured requests. "
+            "The experiment's two global warmups are recorded separately and excluded."
+        )
+        timing_boundaries = """<p>Complete request time includes the metadata probe and hash,
+all source decoding, frame selection, lossless PNG evidence capture and hashes,
+PNG-to-RGB conversion, adapter resizing and processor work, input validation, device transfer,
+generation, output text decoding, and final CUDA synchronization.
+Input preparation includes the metadata probe, decode + sample, model preprocessing,
+and device transfer. Visual-change scan and frame capture are included within
+decode + sample; do not add these subtotals again.
+Generation includes visual encoding, prefill, and autoregressive decoding.
+Model/runtime startup, the experiment's two global warmups, reference review,
+and report export are outside complete request time.</p>
+<p>Every measured request repeats the metadata probe and frame selection.
+The model and processor are reused, filesystem caches may be warm, and the CUDA allocator cache is retained.
+Peak allocated and reserved memory are PyTorch allocator measurements, include resident model weights,
+and are not total device memory usage. Peaks are reset for each request and CUDA timing boundaries are synchronized.</p>"""
+    else:
+        statistics_notice = (
+            "Medians and min–max ranges of successful measured trials. "
+            "Warmups and the first invocation are excluded."
+        )
+        timing_boundaries = """<p>Each trial decodes the video again. Decode + sample includes lossless PNG evidence capture and hashes.
+Pipeline latency starts before decoding and ends after output text decoding and CUDA synchronization.
+Preprocessing includes PNG-to-RGB conversion, adapter resizing and processor work, and input validation.
+Device transfer is timed separately. Generation includes visual encoding, prefill, and autoregressive decoding.
+Model loading, the initial metadata probe, initial gallery extraction, and report export are outside trial latency.</p>
+<p>In benchmark mode, one first invocation per comparison is recorded separately; it is not a fresh-process cold-start measurement.
+Single mode runs exactly once per configuration with no warmup. The model and processor are reused, filesystem caches may be warm, and the CUDA allocator cache is retained.
+Peak allocated and reserved memory are PyTorch allocator measurements, include resident model weights,
+and are not total device memory usage. Peaks are reset for each trial and CUDA timing boundaries are synchronized.</p>"""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>VidFit · Video evidence comparison</title><style>
@@ -176,19 +228,12 @@ table{{border-collapse:collapse;width:100%;font-size:14px}}th,td{{padding:13px 1
 <p>Latency is elapsed time to process input and generate an answer. Longer answers can take more time.
 Visual tokens measure the processed visual input size, not answer quality.
 GPU memory is PyTorch allocator use including model weights, not total device usage or a hardware minimum.</p>
-<p class="muted">Medians and min–max ranges of successful measured trials. Warmups and the first invocation are excluded.</p>
+<p class="muted">{escape(statistics_notice)}</p>
 <div class="table-scroll"><table><thead><tr><th>Metric</th>{header_cells}</tr></thead><tbody>{"".join(rows)}</tbody></table></div></details>
 <section class="definitions"><h2>Measurement boundaries</h2>
-<p>Each trial decodes the video again. Decode + sample includes lossless PNG evidence capture and hashes.
-Pipeline latency starts before decoding and ends after output text decoding and CUDA synchronization.
-Preprocessing includes PNG-to-RGB conversion, native processor work, and input validation.
-Device transfer is timed separately. Generation includes visual encoding, prefill, and autoregressive decoding.
-Model loading, the initial metadata probe, initial gallery extraction, and report export are outside trial latency.</p>
-<p>In benchmark mode, one first invocation per comparison is recorded separately; it is not a fresh-process cold-start measurement.
-Single mode runs exactly once per configuration with no warmup. The model and processor are reused, filesystem caches may be warm, and the CUDA allocator cache is retained.
-Peak allocated and reserved memory are PyTorch allocator measurements, include resident model weights,
-and are not total device memory usage. Peaks are reset for each trial and CUDA timing boundaries are synchronized.</p>
-<p>Visual tokens are counted from native processed input IDs and checked against the processed video grid.
+{timing_boundaries}
+<p>For the native Qwen video adapter, visual tokens are counted from processed input IDs and checked against the video grid.
+For the generic image adapter, visual tokens are unavailable; actual image views, tensor shapes and processed pixel budgets are recorded instead.
 Unavailable values are null in JSON with per-trial reasons. Inspection mode runs no model and has no answer.
 Evidence coverage describes source inputs, not answer correctness. Agreement between answers is not accuracy. Reports contain the selected video frames.</p>
 </section></main></body></html>"""

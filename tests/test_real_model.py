@@ -5,13 +5,24 @@ import pytest
 from vidfit import VideoAnalyzer
 
 
+def real_analyzer(**options):
+    """Use the same native-input checks for either installed model runtime."""
+    return VideoAnalyzer(
+        backend="qwen",
+        model=os.getenv("VIDFIT_TEST_MODEL", "Qwen/Qwen3-VL-2B-Instruct"),
+        dtype=os.getenv("VIDFIT_TEST_DTYPE", "float16"),
+        revision=os.getenv("VIDFIT_TEST_REVISION", "main"),
+        **options,
+    )
+
+
 @pytest.mark.model
 @pytest.mark.skipif(
     os.getenv("VIDFIT_RUN_MODEL_TEST") != "1",
     reason="set VIDFIT_RUN_MODEL_TEST=1 to download and run Qwen",
 )
 def test_real_qwen(demo):
-    result = VideoAnalyzer(backend="qwen3vl", max_new_tokens=64).compare(
+    result = real_analyzer(max_new_tokens=64).compare(
         demo[0],
         "What error message appeared?",
         [4, 8, 16],
@@ -33,7 +44,7 @@ def test_real_qwen(demo):
 def test_real_manual_single_and_padding(demo):
     from vidfit import SelectionSpec
 
-    analyzer = VideoAnalyzer(max_new_tokens=64)
+    analyzer = real_analyzer(max_new_tokens=64)
     selections = [
         SelectionSpec.manual([7.5, 24.375, 37.5, 52.5]),
         SelectionSpec.manual([7.5, 24.375, 52.5]),

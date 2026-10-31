@@ -1,7 +1,7 @@
 """Bookkeeping doubles exercise failure checks; they are never exported as model results."""
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -52,7 +52,7 @@ class ProcessorDouble:
         if self.mode == "resample":
             m.frames_indices[0] += 1
         times = [
-            (m.frames_indices[i] + m.frames_indices[i + 1]) / (2 * m.fps)
+            (m.frames_indices[i] / m.fps + m.frames_indices[i + 1] / m.fps) / 2
             for i in range(0, len(m.frames_indices), 2)
         ]
         self.tokenizer = SimpleNamespace(
@@ -105,3 +105,26 @@ def test_vfr_explicitly_unsupported(monkeypatch, demo):
     meta["constant_frame_rate"] = False
     with pytest.raises(ValueError, match="constant-frame-rate"):
         prepare_video_inputs(ProcessorDouble(), frames, meta, "Describe", 262144)
+
+
+def test_native_prompt_rounding_at_decimal_boundary(monkeypatch, short_video):
+    monkeypatch.setitem(
+        sys.modules, "transformers.video_utils", SimpleNamespace(VideoMetadata=MetadataDouble)
+    )
+    meta = probe_video(short_video)
+    frames, _ = sample_video(short_video, meta, 2)
+    # Construct bookkeeping-only inputs to exercise the native 30-FPS rounding tie.
+    meta.update(nominal_fps=30, frame_count=30, duration_s=1)
+    frames = [
+        replace(
+            frame,
+            frame_index=index,
+            timestamp_s=index / 30,
+            presentation_timestamp_s=index / 30,
+            pts=index,
+            time_base="1/30",
+        )
+        for frame, index in zip(frames, (11, 16), strict=True)
+    ]
+    _, processing, _ = prepare_video_inputs(ProcessorDouble(), frames, meta, "Describe", 262144)
+    assert processing["prompt_timestamps_s_rounded"] == ["0.4"]

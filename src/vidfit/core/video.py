@@ -100,14 +100,27 @@ def evidence_image(frame: FrameEvidence) -> Image.Image:
         return image.convert("RGB")
 
 
-def sample_video(path: str | Path, metadata: dict, budget: int) -> tuple[list[FrameEvidence], dict]:
+def sample_video(
+    path: str | Path, metadata: dict, budget: int, *, capture_frame=None
+) -> tuple[list[Any], dict]:
+    """Select exact source frames, optionally capturing lightweight trace records.
+
+    The default produces complete FrameEvidence for inference. A capture callback
+    receives (frame, index, target, origin) and must return a record with frame_index;
+    sampling, nearest-PTS mapping, tie handling, and duplicate checks stay shared.
+    """
+    capture_frame = _capture if capture_frame is None else capture_frame
     selection = budget if isinstance(budget, SelectionSpec) else SelectionSpec.uniform(budget)
-    targets = selection.targets(metadata["duration_s"])
     budget = selection.count
     if budget > metadata["frame_count"]:
         raise ValueError(
             f"requested {budget} frames but video has {metadata['frame_count']} distinct frames"
         )
+    if selection.method == "visual_change":
+        from vidfit.core.visual_change import sample_visual_change
+
+        return sample_visual_change(path, metadata, budget, capture_frame)
+    targets = selection.targets(metadata["duration_s"])
     start = perf_counter()
     evidence = []
     origin = metadata["first_presentation_timestamp_s"]
@@ -124,11 +137,13 @@ def sample_video(path: str | Path, metadata: dict, budget: int) -> tuple[list[Fr
                         prev_ts = float(previous.pts * previous.time_base) - origin
                         if target - prev_ts <= ts - target + 1e-12:
                             chosen, chosen_index = previous, previous_index
-                    evidence.append(_capture(chosen, chosen_index, target, origin))
+                    evidence.append(capture_frame(chosen, chosen_index, target, origin))
                     target_index += 1
                 previous, previous_index = frame, index
             while target_index < len(targets) and previous is not None:
-                evidence.append(_capture(previous, previous_index, targets[target_index], origin))
+                evidence.append(
+                    capture_frame(previous, previous_index, targets[target_index], origin)
+                )
                 target_index += 1
     except (av.FFmpegError, OSError) as exc:
         raise ValueError(f"sampling failed: {type(exc).__name__}") from exc
