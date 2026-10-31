@@ -12,10 +12,11 @@ Python API for your own selection policies.
 [Experiments](#run-a-selection-experiment) · [Measurements](#measurement-contract) ·
 [Documentation](#documentation) · [Contributing](#contributing)
 
-![VidFit interface showing a real Qwen answer alongside timestamped input frames](docs/assets/interface.jpg)
+![Current VidFit interface with model controls, visual-change previews and real Qwen answers for two four-frame selections](docs/assets/interface-current.jpg)
 
-*Recorded Qwen run from the v0.2 interface. See the
-[validation record](docs/validation.md) for tested configurations and limitations.*
+*Current interface on the synthetic demo: uniform four-frame inputs on the left,
+visual-change four-frame inputs on the right. These are real Qwen3-VL answers;
+the displayed judgments remain unreviewed. [Capture details](docs/validation.md#current-interface-screenshots-2026-10-31).*
 
 ## What you can study
 
@@ -108,6 +109,8 @@ sets precision and pixel limits. The CLI does not apply preset settings automati
 pass the appropriate `--dtype` and `--max-pixels` when changing models.
 `--backend auto` chooses an adapter from the checkpoint configuration.
 
+![Model picker offering Qwen3-VL, Qwen3.5, SmolVLM2, LLaVA-OneVision and a custom Hugging Face model](docs/assets/model-selection.jpg)
+
 | Tested checkpoint | Input representation in VidFit | Tested precision | Native sampling trace |
 | --- | --- | --- | --- |
 | `Qwen/Qwen3-VL-2B-Instruct` | Native video | FP16 | Yes |
@@ -166,6 +169,11 @@ The export records selected indices, decoded timestamps, overlap and processor
 provenance. It loads configuration files but **no weights**, and runs neither full
 visual preprocessing nor inference or attention analysis. Tracing does not change
 the frames used for answering. See the [sampling contract](docs/measurement.md#native-sampling-traces).
+
+![Native sampling report comparing VidFit visual-change frames with the Qwen processor's four selected frames](docs/assets/native-sampling.jpg)
+
+*The exported HTML report shows the exact source indices and decoded timestamps
+from the current processor trace. This sampling inspection runs without model inference.*
 
 <a id="compare-a-visual-change-selector-with-uniform-sampling"></a>
 

@@ -459,3 +459,30 @@ the full campaign. Diagnostic overrides existed only in their own process:
 **the application and installed runtime remain unchanged**. Native LLaVA video
 handling and verified efficient attention dispatch still need implementation and
 a full matched-frame accuracy/timing rerun.
+
+## Current interface screenshots (2026-10-31)
+
+The README images were refreshed from the running application at commit
+`79e31d243e8d938aa058f05fb896400fb07a8135`. The captures show the current model
+controls, visual-change selector, real answer cards and generated native sampling
+report. They are browser screenshots, with no generated or substituted answers.
+
+- [Interface overview](assets/interface-current.jpg): two real Qwen3-VL 2B requests
+  on the MIT synthetic `brief-error.mp4`, first uniform four frames, then
+  visual-change four frames. The question was "What error message appeared?".
+  Both used the native Qwen adapter via `auto`, FP16, a 262144-pixel cap,
+  a 64-token output limit and single execution mode. The resolved checkpoint was
+  `89644892e4d85e24eaac8bacfd4f463576704203`, with Transformers 5.5.4.
+- [Model menu](assets/model-selection.jpg): the current preset list and custom
+  model option. Listing a preset does not validate it; SmolVLM2 2.2B remains untested.
+- [Native sampling export](assets/native-sampling.jpg): the actual HTML generated
+  by the UI, opened separately for readability. The same-count trace compares
+  VidFit source indices `[64, 192, 250, 376]` with Qwen's `[0, 160, 319, 479]`.
+  The sampling-rule disclosure was collapsed for the capture. This trace loads
+  processor configuration and runs sampling, with no model inference.
+
+The demo SHA-256 is
+`b2e21e305a045592a52a345a26c60705c36d05d73b3944718ba2c271b9d29e33`.
+The answer cards retain "Not evaluated (unreviewed)"; these captures demonstrate
+the interface and are not an additional accuracy or latency benchmark. The older
+`interface.jpg` remains linked in the historical v0.2 validation record.
